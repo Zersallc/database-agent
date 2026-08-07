@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { auth } from "@/lib/auth";
 
 type Message = {
   role: "user" | "assistant";
@@ -37,6 +38,11 @@ graph TD
 `;
 
 export async function POST(req: NextRequest) {
+  const session = await auth();
+  if (!session?.user?.id) {
+    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  }
+
   const { messages } = (await req.json()) as { messages: Message[] };
   const lastUserMessage = messages[messages.length - 1]?.content ?? "";
 
