@@ -1,6 +1,17 @@
 "use client";
 
-import { MessageSquareIcon, PlusIcon, XIcon } from "lucide-react";
+import Link from "next/link";
+import { usePathname, useRouter } from "next/navigation";
+import {
+  BookOpenIcon,
+  LogOutIcon,
+  MessageSquareIcon,
+  PlusIcon,
+  SettingsIcon,
+  SparklesIcon,
+  UsersIcon,
+  XIcon,
+} from "lucide-react";
 import {
   Sidebar,
   SidebarContent,
@@ -17,14 +28,24 @@ import {
   SidebarSeparator,
 } from "@/components/ui/sidebar";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
+import { Button } from "@/components/ui/button";
 import { ThemeToggle } from "@/components/theme/ThemeToggle";
-import { ConnectionSwitcher } from "./ConnectionSwitcher";
+import { signOut, useCurrentUser } from "@/lib/users-store";
+import { canManageUsers, userSubtitle } from "@/lib/workspace";
 import { useWorkspace } from "@/lib/workspace-store";
+import { ConnectionSwitcher } from "./ConnectionSwitcher";
 
-// Placeholder identity until real auth exists.
-const MOCK_USER = { name: "Mountacir", email: "mountacirw@gmail.com" };
+const NAV = [
+  { href: "/", label: "Chat", icon: SparklesIcon },
+  { href: "/playbook", label: "Playbook", icon: BookOpenIcon },
+  { href: "/users", label: "Users", icon: UsersIcon, adminOnly: true },
+  { href: "/settings", label: "Settings", icon: SettingsIcon },
+];
 
 export function WorkspaceSidebar() {
+  const pathname = usePathname();
+  const router = useRouter();
+  const user = useCurrentUser();
   const {
     conversations,
     activeConversationId,
@@ -33,63 +54,105 @@ export function WorkspaceSidebar() {
     deleteConversation,
   } = useWorkspace();
 
+  const onChat = pathname === "/";
+  const nav = NAV.filter(
+    (item) => !item.adminOnly || (user && canManageUsers(user))
+  );
+
   return (
     <Sidebar collapsible="icon">
       <SidebarHeader>
         <ConnectionSwitcher />
-        <SidebarMenu>
-          <SidebarMenuItem>
-            <SidebarMenuButton onClick={newConversation} tooltip="New chat">
-              <PlusIcon />
-              <span>New chat</span>
-            </SidebarMenuButton>
-          </SidebarMenuItem>
-        </SidebarMenu>
       </SidebarHeader>
 
       <SidebarContent>
         <SidebarGroup>
-          <SidebarGroupLabel>Conversations</SidebarGroupLabel>
           <SidebarGroupContent>
             <SidebarMenu>
-              {conversations.map((conversation) => (
-                <SidebarMenuItem key={conversation.id}>
+              {nav.map((item) => (
+                <SidebarMenuItem key={item.href}>
                   <SidebarMenuButton
-                    isActive={conversation.id === activeConversationId}
-                    onClick={() => selectConversation(conversation.id)}
-                    tooltip={conversation.title}
+                    isActive={pathname === item.href}
+                    tooltip={item.label}
+                    render={<Link href={item.href} />}
                   >
-                    <MessageSquareIcon />
-                    <span>{conversation.title}</span>
+                    <item.icon />
+                    <span>{item.label}</span>
                   </SidebarMenuButton>
-                  <SidebarMenuAction
-                    showOnHover
-                    aria-label={`Delete ${conversation.title}`}
-                    onClick={() => deleteConversation(conversation.id)}
-                  >
-                    <XIcon />
-                  </SidebarMenuAction>
                 </SidebarMenuItem>
               ))}
             </SidebarMenu>
           </SidebarGroupContent>
         </SidebarGroup>
+
+        {/* Conversation history is only relevant on the chat route. */}
+        {onChat && (
+          <SidebarGroup>
+            <SidebarGroupLabel>Conversations</SidebarGroupLabel>
+            <SidebarGroupContent>
+              <SidebarMenu>
+                <SidebarMenuItem>
+                  <SidebarMenuButton onClick={newConversation} tooltip="New chat">
+                    <PlusIcon />
+                    <span>New chat</span>
+                  </SidebarMenuButton>
+                </SidebarMenuItem>
+
+                {conversations.map((conversation) => (
+                  <SidebarMenuItem key={conversation.id}>
+                    <SidebarMenuButton
+                      isActive={conversation.id === activeConversationId}
+                      onClick={() => selectConversation(conversation.id)}
+                      tooltip={conversation.title}
+                    >
+                      <MessageSquareIcon />
+                      <span>{conversation.title}</span>
+                    </SidebarMenuButton>
+                    <SidebarMenuAction
+                      showOnHover
+                      aria-label={`Delete ${conversation.title}`}
+                      onClick={() => deleteConversation(conversation.id)}
+                    >
+                      <XIcon />
+                    </SidebarMenuAction>
+                  </SidebarMenuItem>
+                ))}
+              </SidebarMenu>
+            </SidebarGroupContent>
+          </SidebarGroup>
+        )}
       </SidebarContent>
 
       <SidebarFooter>
         <SidebarSeparator />
-        <div className="flex items-center gap-2 p-1 group-data-[collapsible=icon]:hidden">
-          <Avatar className="size-7">
-            <AvatarFallback className="bg-sidebar-accent text-xs text-sidebar-accent-foreground">
-              {MOCK_USER.name.slice(0, 2).toUpperCase()}
-            </AvatarFallback>
-          </Avatar>
-          <div className="grid flex-1 leading-tight">
-            <span className="truncate text-sm font-medium">{MOCK_USER.name}</span>
-            <span className="truncate text-xs opacity-70">{MOCK_USER.email}</span>
+        {user && (
+          <div className="flex items-center gap-2 p-1 group-data-[collapsible=icon]:hidden">
+            <Avatar className="size-7">
+              <AvatarFallback className="bg-sidebar-accent text-xs text-sidebar-accent-foreground">
+                {user.name.slice(0, 2).toUpperCase()}
+              </AvatarFallback>
+            </Avatar>
+            <div className="grid min-w-0 flex-1 leading-tight">
+              <span className="truncate text-sm font-medium">{user.name}</span>
+              <span className="truncate text-xs opacity-70">
+                {userSubtitle(user)}
+              </span>
+            </div>
+            <ThemeToggle />
+            <Button
+              variant="ghost"
+              size="icon-sm"
+              aria-label="Sign out"
+              className="text-sidebar-foreground hover:bg-sidebar-accent hover:text-sidebar-accent-foreground"
+              onClick={() => {
+                signOut();
+                router.replace("/login");
+              }}
+            >
+              <LogOutIcon />
+            </Button>
           </div>
-          <ThemeToggle />
-        </div>
+        )}
       </SidebarFooter>
 
       <SidebarRail />

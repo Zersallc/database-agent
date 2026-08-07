@@ -1,8 +1,19 @@
 import { NextRequest, NextResponse } from "next/server";
 
+type Attachment = { name: string; mimeType: string };
+
 type Message = {
   role: "user" | "assistant";
   content: string;
+  attachments?: Attachment[];
+};
+
+type ChatRequest = {
+  messages: Message[];
+  connectionId?: string;
+  playbookContext?: string;
+  enabledSkills?: string[];
+  responseDetail?: string;
 };
 
 // Exercises every content handler the frontend knows how to render.
@@ -58,14 +69,37 @@ graph TD
 `;
 
 export async function POST(req: NextRequest) {
-  const { messages } = (await req.json()) as {
-    messages: Message[];
-    connectionId?: string;
-  };
-  const lastUserMessage = messages[messages.length - 1]?.content ?? "";
+  const {
+    messages,
+    playbookContext = "",
+    enabledSkills = [],
+    responseDetail,
+  } = (await req.json()) as ChatRequest;
+
+  const last = messages[messages.length - 1];
+  const lastUserMessage = last?.content ?? "";
+  const attachments = last?.attachments ?? [];
+
+  // Echoes back what the frontend sent so the playbook and attachment wiring is
+  // visible end to end. A real agent would put this in the model's context
+  // instead of the reply.
+  const received = [
+    enabledSkills.length > 0
+      ? `**Playbook** — ${playbookContext.length.toLocaleString()} characters, skills active: ${enabledSkills.join(", ")}.`
+      : "**Playbook** — no skills enabled.",
+    responseDetail ? `**Response detail** — ${responseDetail}.` : null,
+    attachments.length > 0
+      ? `**Attachments** — ${attachments.map((a) => a.name).join(", ")}.`
+      : null,
+  ]
+    .filter(Boolean)
+    .join("\n\n");
 
   // TODO: replace with a real LLM call + database query once credentials are provided.
-  const reply = `You asked: "${lastUserMessage}"\n\n${DEMO_REPLY}`;
+  const asked = lastUserMessage
+    ? `You asked: "${lastUserMessage}"`
+    : "You sent an image with no question.";
+  const reply = `${asked}\n\n${received}\n\n---\n\n${DEMO_REPLY}`;
 
   return NextResponse.json({ reply });
 }
