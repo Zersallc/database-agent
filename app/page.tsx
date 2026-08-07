@@ -2,6 +2,8 @@
 
 import { useState } from "react";
 import type { FormEvent } from "react";
+import { motion, AnimatePresence } from "framer-motion";
+import { Markdown } from "@/components/chat/Markdown";
 
 type Message = {
   role: "user" | "assistant";
@@ -43,7 +45,7 @@ export default function Home() {
 
   return (
     <div className="flex min-h-screen flex-col items-center bg-zinc-50 font-sans dark:bg-black">
-      <div className="flex w-full max-w-2xl flex-1 flex-col px-4 py-8">
+      <div className="flex w-full max-w-3xl flex-1 flex-col px-4 py-8">
         <h1 className="mb-1 text-2xl font-semibold text-black dark:text-zinc-50">
           Database Agent
         </h1>
@@ -57,22 +59,33 @@ export default function Home() {
               No messages yet — ask something below to get started.
             </p>
           )}
-          {messages.map((m, i) => (
-            <div
-              key={i}
-              className={`max-w-[85%] rounded-lg px-3 py-2 text-sm ${
-                m.role === "user"
-                  ? "self-end bg-black text-white dark:bg-zinc-50 dark:text-black"
-                  : "self-start bg-zinc-100 text-black dark:bg-zinc-800 dark:text-zinc-50"
-              }`}
-            >
-              {m.content}
-            </div>
-          ))}
+
+          <AnimatePresence initial={false}>
+            {messages.map((m, i) => (
+              <motion.div
+                key={i}
+                initial={{ opacity: 0, y: 8 }}
+                animate={{ opacity: 1, y: 0 }}
+                transition={{ duration: 0.2, ease: "easeOut" }}
+                className={
+                  m.role === "user"
+                    ? "max-w-[85%] self-end rounded-lg bg-black px-3 py-2 text-sm text-white dark:bg-zinc-50 dark:text-black"
+                    : "w-full self-start rounded-lg bg-zinc-100 px-3 py-2 text-sm text-black dark:bg-zinc-800 dark:text-zinc-50"
+                }
+              >
+                {m.role === "assistant" ? <Markdown content={m.content} /> : m.content}
+              </motion.div>
+            ))}
+          </AnimatePresence>
+
           {loading && (
-            <div className="self-start rounded-lg bg-zinc-100 px-3 py-2 text-sm text-zinc-400 dark:bg-zinc-800 dark:text-zinc-500">
+            <motion.div
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              className="self-start rounded-lg bg-zinc-100 px-3 py-2 text-sm text-zinc-400 dark:bg-zinc-800 dark:text-zinc-500"
+            >
               Thinking…
-            </div>
+            </motion.div>
           )}
         </div>
 
