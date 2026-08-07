@@ -1,0 +1,157 @@
+"use client";
+
+import { useEffect, useRef, useState } from "react";
+import { AnimatePresence } from "framer-motion";
+import { SidebarTrigger } from "@/components/ui/sidebar";
+import { Separator } from "@/components/ui/separator";
+import { Badge } from "@/components/ui/badge";
+import { useWorkspace } from "@/lib/workspace-store";
+import { ChatComposer } from "./ChatComposer";
+import { MessageBubble } from "./MessageBubble";
+import {
+  AgentStatusBlock,
+  DEFAULT_AGENT_STEPS,
+  type AgentStep,
+} from "./blocks/AgentStatusBlock";
+import type { Message } from "@/lib/workspace";
+
+const SUGGESTIONS = [
+  "Which regions grew fastest last quarter?",
+  "Show me daily signups for the last 7 days",
+  "What tables are available in this database?",
+  "Find customers with no orders in 90 days",
+];
+
+/** Turns an index into the step list the AgentStatusBlock renders. */
+function stepsAt(index: number): AgentStep[] {
+  return DEFAULT_AGENT_STEPS.map((label, i) => ({
+    label,
+    status: i < index ? "done" : i === index ? "active" : "pending",
+  }));
+}
+
+export function ChatWorkspace() {
+  const { activeConversation, activeConnection, appendMessage } = useWorkspace();
+  const [input, setInput] = useState("");
+  const [loading, setLoading] = useState(false);
+  const [stepIndex, setStepIndex] = useState(0);
+  const bottomRef = useRef<HTMLDivElement>(null);
+
+  const messages = activeConversation.messages;
+
+  useEffect(() => {
+    bottomRef.current?.scrollIntoView({ behavior: "smooth" });
+  }, [messages.length, loading, stepIndex]);
+
+  // Canned progress ticker. Replace with real agent events once the backend
+  // streams them.
+  useEffect(() => {
+    if (!loading) return;
+    const timer = setInterval(() => {
+      setStepIndex((i) => Math.min(i + 1, DEFAULT_AGENT_STEPS.length - 1));
+    }, 450);
+    return () => clearInterval(timer);
+  }, [loading]);
+
+  async function send(text: string) {
+    const trimmed = text.trim();
+    if (!trimmed || loading) return;
+
+    const userMessage: Message = { role: "user", content: trimmed };
+    const history = [...messages, userMessage];
+    appendMessage(userMessage);
+    setInput("");
+    setStepIndex(0);
+    setLoading(true);
+
+    try {
+      const res = await fetch("/api/chat", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          messages: history,
+          connectionId: activeConnection.id,
+        }),
+      });
+      const data = await res.json();
+      appendMessage({ role: "assistant", content: data.reply });
+    } catch {
+      appendMessage({
+        role: "assistant",
+        content: "Something went wrong. Please try again.",
+      });
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  return (
+    <div className="flex h-svh flex-col">
+      <header className="flex h-12 shrink-0 items-center gap-2 border-b border-border px-3">
+        <SidebarTrigger />
+        <Separator orientation="vertical" className="mr-1 h-4" />
+        <span className="truncate text-sm font-medium">
+          {activeConversation.title}
+        </span>
+        <Badge variant="secondary" className="ml-auto">
+          {activeConnection.name} · {activeConnection.engine}
+        </Badge>
+      </header>
+
+      <div className="flex-1 overflow-y-auto">
+        <div className="mx-auto w-full max-w-3xl px-4 py-6">
+          {messages.length === 0 && !loading ? (
+            <div className="flex flex-col items-center gap-6 py-16 text-center">
+              <div>
+                <h1 className="text-2xl font-semibold">
+                  Ask anything about your data
+                </h1>
+                <p className="mt-1 text-sm text-muted-foreground">
+                  Connected to {activeConnection.name} ({activeConnection.engine})
+                </p>
+              </div>
+              <div className="grid w-full gap-2 sm:grid-cols-2">
+                {SUGGESTIONS.map((suggestion) => (
+                  <button
+                    key={suggestion}
+                    type="button"
+                    onClick={() => send(suggestion)}
+                    className="rounded-lg border border-border bg-card px-3 py-2.5 text-left text-sm transition-colors hover:bg-accent hover:text-accent-foreground"
+                  >
+                    {suggestion}
+                  </button>
+                ))}
+              </div>
+            </div>
+          ) : (
+            <div className="flex flex-col gap-5">
+              <AnimatePresence initial={false}>
+                {messages.map((message, i) => (
+                  <MessageBubble key={i} message={message} />
+                ))}
+              </AnimatePresence>
+
+              {loading && <AgentStatusBlock steps={stepsAt(stepIndex)} />}
+            </div>
+          )}
+          <div ref={bottomRef} />
+        </div>
+      </div>
+
+      <div className="shrink-0 border-t border-border bg-background px-4 py-3">
+        <div className="mx-auto w-full max-w-3xl">
+          <ChatComposer
+            value={input}
+            onChange={setInput}
+            onSubmit={() => send(input)}
+            disabled={loading}
+            placeholder={`Ask ${activeConnection.name} anything…`}
+          />
+          <p className="mt-2 text-center text-xs text-muted-foreground">
+            Responses are mocked — no database is connected yet.
+          </p>
+        </div>
+      </div>
+    </div>
+  );
+}
