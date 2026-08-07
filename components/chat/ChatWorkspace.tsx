@@ -2,10 +2,12 @@
 
 import { useEffect, useRef, useState } from "react";
 import { AnimatePresence } from "framer-motion";
-import { SidebarTrigger } from "@/components/ui/sidebar";
-import { Separator } from "@/components/ui/separator";
 import { Badge } from "@/components/ui/badge";
+import { PageHeader } from "@/components/app-shell/PageHeader";
+import { buildAgentContext, usePlaybook } from "@/lib/playbook-store";
+import { useSettings } from "@/lib/settings-store";
 import { useWorkspace } from "@/lib/workspace-store";
+import type { Attachment, Message } from "@/lib/workspace";
 import { ChatComposer } from "./ChatComposer";
 import { MessageBubble } from "./MessageBubble";
 import {
@@ -13,7 +15,6 @@ import {
   DEFAULT_AGENT_STEPS,
   type AgentStep,
 } from "./blocks/AgentStatusBlock";
-import type { Message } from "@/lib/workspace";
 
 const SUGGESTIONS = [
   "Which regions grew fastest last quarter?",
@@ -32,7 +33,10 @@ function stepsAt(index: number): AgentStep[] {
 
 export function ChatWorkspace() {
   const { activeConversation, activeConnection, appendMessage } = useWorkspace();
+  const playbook = usePlaybook();
+  const settings = useSettings();
   const [input, setInput] = useState("");
+  const [attachments, setAttachments] = useState<Attachment[]>([]);
   const [loading, setLoading] = useState(false);
   const [stepIndex, setStepIndex] = useState(0);
   const bottomRef = useRef<HTMLDivElement>(null);
@@ -53,14 +57,19 @@ export function ChatWorkspace() {
     return () => clearInterval(timer);
   }, [loading]);
 
-  async function send(text: string) {
+  async function send(text: string, files: Attachment[] = []) {
     const trimmed = text.trim();
-    if (!trimmed || loading) return;
+    if ((!trimmed && files.length === 0) || loading) return;
 
-    const userMessage: Message = { role: "user", content: trimmed };
+    const userMessage: Message = {
+      role: "user",
+      content: trimmed,
+      ...(files.length > 0 ? { attachments: files } : {}),
+    };
     const history = [...messages, userMessage];
     appendMessage(userMessage);
     setInput("");
+    setAttachments([]);
     setStepIndex(0);
     setLoading(true);
 
@@ -71,6 +80,10 @@ export function ChatWorkspace() {
         body: JSON.stringify({
           messages: history,
           connectionId: activeConnection.id,
+          // Everything the Playbook page assembles travels with the question.
+          playbookContext: buildAgentContext(playbook),
+          enabledSkills: playbook.skills.filter((s) => s.enabled).map((s) => s.name),
+          responseDetail: settings.responseDetail,
         }),
       });
       const data = await res.json();
@@ -87,16 +100,14 @@ export function ChatWorkspace() {
 
   return (
     <div className="flex h-svh flex-col">
-      <header className="flex h-12 shrink-0 items-center gap-2 border-b border-border px-3">
-        <SidebarTrigger />
-        <Separator orientation="vertical" className="mr-1 h-4" />
-        <span className="truncate text-sm font-medium">
-          {activeConversation.title}
-        </span>
-        <Badge variant="secondary" className="ml-auto">
-          {activeConnection.name} · {activeConnection.engine}
-        </Badge>
-      </header>
+      <PageHeader
+        title={activeConversation.title}
+        actions={
+          <Badge variant="secondary">
+            {activeConnection.name} · {activeConnection.engine}
+          </Badge>
+        }
+      />
 
       <div className="flex-1 overflow-y-auto">
         <div className="mx-auto w-full max-w-3xl px-4 py-6">
@@ -143,7 +154,9 @@ export function ChatWorkspace() {
           <ChatComposer
             value={input}
             onChange={setInput}
-            onSubmit={() => send(input)}
+            attachments={attachments}
+            onAttachmentsChange={setAttachments}
+            onSubmit={() => send(input, attachments)}
             disabled={loading}
             placeholder={`Ask ${activeConnection.name} anything…`}
           />

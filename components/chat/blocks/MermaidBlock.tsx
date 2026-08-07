@@ -1,14 +1,29 @@
 "use client";
 
-import { useEffect, useId, useState } from "react";
+import { useEffect, useId, useRef, useState } from "react";
 import mermaid from "mermaid";
 import { useDarkMode } from "@/hooks/use-dark-mode";
+import {
+  downloadElementAsPdf,
+  downloadSvg,
+  downloadSvgAsPng,
+  safeFilename,
+} from "@/lib/export";
+import { BlockToolbar } from "./BlockToolbar";
 
-export function MermaidBlock({ chart }: { chart: string }) {
+export function MermaidBlock({
+  chart,
+  name = "diagram",
+}: {
+  chart: string;
+  name?: string;
+}) {
   const rawId = useId().replace(/[^a-zA-Z0-9]/g, "");
   const [svg, setSvg] = useState<string | null>(null);
   const [error, setError] = useState(false);
   const isDark = useDarkMode();
+  // Exports target the diagram only, so the toolbar never lands in the file.
+  const diagramRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -56,10 +71,44 @@ export function MermaidBlock({ chart }: { chart: string }) {
     );
   }
 
+  const base = safeFilename(name, "diagram");
+  // Scoped to the diagram wrapper, not the whole block — the toolbar's own
+  // icons are SVGs too and would otherwise win the query.
+  const findSvg = () =>
+    (diagramRef.current?.querySelector("svg") as SVGElement | null) ?? null;
+
   return (
-    <div
-      className="my-3 overflow-x-auto rounded-lg border border-border bg-card p-4 not-prose [&_svg]:mx-auto"
-      dangerouslySetInnerHTML={{ __html: svg }}
-    />
+    <div className="my-3 not-prose">
+      <BlockToolbar
+        className="rounded-t-lg"
+        exports={[
+          {
+            label: "SVG",
+            onSelect: () => {
+              const el = findSvg();
+              if (el) downloadSvg(el, `${base}.svg`);
+            },
+          },
+          {
+            label: "PNG image",
+            onSelect: () => {
+              const el = findSvg();
+              if (el) downloadSvgAsPng(el, `${base}.png`);
+            },
+          },
+          {
+            label: "PDF",
+            onSelect: () =>
+              diagramRef.current &&
+              downloadElementAsPdf(diagramRef.current, `${base}.pdf`),
+          },
+        ]}
+      />
+      <div
+        ref={diagramRef}
+        className="overflow-x-auto rounded-b-lg border border-border bg-card p-4 [&_svg]:mx-auto"
+        dangerouslySetInnerHTML={{ __html: svg }}
+      />
+    </div>
   );
 }

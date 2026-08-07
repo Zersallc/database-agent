@@ -1,17 +1,30 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { CopyIcon, LightbulbIcon, LoaderIcon, PlayIcon } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import {
+  downloadCSV,
+  downloadElementAsPdf,
+  downloadText,
+  safeFilename,
+} from "@/lib/export";
+import { useSettings } from "@/lib/settings-store";
+import { BlockToolbar } from "./BlockToolbar";
 import { CodeBlock } from "./CodeBlock";
 import { TableBlock } from "./TableBlock";
 import { mockExecute, mockExplain, type QueryResult } from "./sql/mockExecute";
 
-export function SQLBlock({ sql }: { sql: string }) {
+export function SQLBlock({ sql, name = "query" }: { sql: string; name?: string }) {
+  const { autoRunSql } = useSettings();
   const [result, setResult] = useState<QueryResult | null>(null);
   const [explain, setExplain] = useState<string | null>(null);
-  const [running, setRunning] = useState(false);
+  // Start in the running state when auto-run is on, so the effect below only
+  // ever sets state from its callback.
+  const [running, setRunning] = useState(autoRunSql);
+  // Exports target the content only, so the toolbar never lands in the file.
+  const contentRef = useRef<HTMLDivElement>(null);
 
   async function run() {
     setRunning(true);
@@ -22,11 +35,50 @@ export function SQLBlock({ sql }: { sql: string }) {
     }
   }
 
+  // "Auto-run generated SQL" in settings — execute without waiting for a click.
+  useEffect(() => {
+    if (!autoRunSql) return;
+    let cancelled = false;
+    mockExecute(sql).then((next) => {
+      if (cancelled) return;
+      setResult(next);
+      setRunning(false);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [autoRunSql, sql]);
+
+  const base = safeFilename(name, "query");
+
   return (
     <div className="my-3 not-prose">
-      <div className="flex flex-wrap items-center gap-2 rounded-t-lg border border-b-0 border-border bg-muted/60 px-2 py-1.5">
+      <BlockToolbar
+        className="rounded-t-lg"
+        exports={[
+          {
+            label: ".sql file",
+            onSelect: () => downloadText(sql, `${base}.sql`, "text/plain"),
+          },
+          ...(result
+            ? [
+                {
+                  label: "Results CSV",
+                  onSelect: () =>
+                    downloadCSV(result.columns, result.rows, `${base}-results.csv`),
+                },
+              ]
+            : []),
+          {
+            label: "PDF",
+            onSelect: () =>
+              contentRef.current &&
+              downloadElementAsPdf(contentRef.current, `${base}.pdf`),
+          },
+        ]}
+      >
         <Badge variant="outline">SQL</Badge>
-        <Button size="xs" onClick={run} disabled={running}>
+        <Button size="xs" onClick={() => void run()} disabled={running}>
           {running ? <LoaderIcon className="animate-spin" /> : <PlayIcon />}
           {running ? "Running…" : "Execute"}
         </Button>
@@ -41,7 +93,6 @@ export function SQLBlock({ sql }: { sql: string }) {
         <Button
           size="xs"
           variant="ghost"
-          className="ml-auto"
           onClick={() => navigator.clipboard.writeText(sql)}
         >
           <CopyIcon />
@@ -52,22 +103,32 @@ export function SQLBlock({ sql }: { sql: string }) {
             {result.rowCount} rows · {result.executionTimeMs} ms
           </Badge>
         )}
+      </BlockToolbar>
+
+      {/* Everything below the toolbar — this is what exports capture. Nested
+          toolbars (the results table's) are skipped via data-export-ignore. */}
+      <div ref={contentRef}>
+        <CodeBlock
+          code={sql}
+          language="sql"
+          showHeader={false}
+          className="my-0 rounded-t-none"
+        />
+
+        {explain && (
+          <pre className="mt-2 overflow-x-auto rounded-lg border border-border bg-muted/40 p-3 text-xs text-muted-foreground">
+            {explain}
+          </pre>
+        )}
+
+        {result && (
+          <TableBlock
+            columns={result.columns}
+            rows={result.rows}
+            name={`${base}-results`}
+          />
+        )}
       </div>
-
-      <CodeBlock
-        code={sql}
-        language="sql"
-        showHeader={false}
-        className="my-0 rounded-t-none"
-      />
-
-      {explain && (
-        <pre className="mt-2 overflow-x-auto rounded-lg border border-border bg-muted/40 p-3 text-xs text-muted-foreground">
-          {explain}
-        </pre>
-      )}
-
-      {result && <TableBlock columns={result.columns} rows={result.rows} />}
     </div>
   );
 }

@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useMemo, useRef, useState } from "react";
 import {
   flexRender,
   getCoreRowModel,
@@ -17,45 +17,34 @@ import {
   ArrowUpIcon,
   ChevronLeftIcon,
   ChevronRightIcon,
-  DownloadIcon,
 } from "lucide-react";
-import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { Button } from "@/components/ui/button";
+import {
+  downloadCSV,
+  downloadElementAsPdf,
+  downloadElementAsPng,
+  EXPORT_IGNORE_ATTRIBUTE,
+  safeFilename,
+  type CellValue,
+} from "@/lib/export";
 import { cn } from "@/lib/utils";
-
-type CellValue = string | number | boolean | null;
+import { BlockToolbar } from "./BlockToolbar";
 
 const PAGE_SIZES = [10, 25, 50];
-
-function toCSV(columns: string[], rows: CellValue[][]): string {
-  const escape = (value: CellValue) => {
-    const text = value === null || value === undefined ? "" : String(value);
-    return /[",\n]/.test(text) ? `"${text.replace(/"/g, '""')}"` : text;
-  };
-  return [columns.map(escape).join(","), ...rows.map((r) => r.map(escape).join(","))].join(
-    "\n"
-  );
-}
-
-function downloadCSV(columns: string[], rows: CellValue[][]) {
-  const blob = new Blob([toCSV(columns, rows)], {
-    type: "text/csv;charset=utf-8;",
-  });
-  const url = URL.createObjectURL(blob);
-  const link = document.createElement("a");
-  link.href = url;
-  link.download = "results.csv";
-  link.click();
-  URL.revokeObjectURL(url);
-}
 
 export function TableBlock({
   columns,
   rows,
+  name = "table",
 }: {
   columns: string[];
   rows: CellValue[][];
+  /** Used to name exported files. */
+  name?: string;
 }) {
+  // Exports target the content only, so the toolbar never lands in the file.
+  const contentRef = useRef<HTMLDivElement>(null);
   const [sorting, setSorting] = useState<SortingState>([]);
   const [globalFilter, setGlobalFilter] = useState("");
 
@@ -99,30 +88,43 @@ export function TableBlock({
   const filteredCount = table.getFilteredRowModel().rows.length;
   const pageCount = table.getPageCount();
 
+  const base = safeFilename(name, "table");
+
   return (
     <div className="my-3 not-prose">
-      <div className="mb-2 flex flex-wrap items-center gap-2">
+      <BlockToolbar
+        className="rounded-t-lg"
+        exports={[
+          { label: "CSV", onSelect: () => downloadCSV(columns, rows, `${base}.csv`) },
+          {
+            label: "PNG image",
+            onSelect: () =>
+              contentRef.current &&
+              downloadElementAsPng(contentRef.current, `${base}.png`),
+          },
+          {
+            label: "PDF",
+            onSelect: () =>
+              contentRef.current &&
+              downloadElementAsPdf(contentRef.current, `${base}.pdf`),
+          },
+        ]}
+      >
         <Input
           value={globalFilter}
           onChange={(e) => setGlobalFilter(e.target.value)}
           placeholder="Search rows…"
-          className="h-8 max-w-56"
+          className="h-7 max-w-48"
         />
         <span className="text-xs text-muted-foreground">
           {filteredCount} {filteredCount === 1 ? "row" : "rows"}
         </span>
-        <Button
-          variant="outline"
-          size="sm"
-          className="ml-auto"
-          onClick={() => downloadCSV(columns, rows)}
-        >
-          <DownloadIcon />
-          Export CSV
-        </Button>
-      </div>
+      </BlockToolbar>
 
-      <div className="overflow-x-auto rounded-lg border border-border">
+      <div
+        ref={contentRef}
+        className="overflow-x-auto rounded-b-lg border border-border"
+      >
         <table
           className="w-full text-sm"
           style={{ width: table.getCenterTotalSize() }}
@@ -185,7 +187,10 @@ export function TableBlock({
       </div>
 
       {pageCount > 1 && (
-        <div className="mt-2 flex items-center gap-2">
+        <div
+          {...{ [EXPORT_IGNORE_ATTRIBUTE]: "" }}
+          className="mt-2 flex items-center gap-2"
+        >
           <Button
             variant="outline"
             size="icon-sm"

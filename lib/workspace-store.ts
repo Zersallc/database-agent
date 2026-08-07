@@ -1,6 +1,7 @@
 "use client";
 
 import { useSyncExternalStore } from "react";
+import { getDefaultConnectionId } from "./settings-store";
 import {
   createConversation,
   MOCK_CONNECTIONS,
@@ -88,14 +89,22 @@ function update(updater: (prev: WorkspaceState) => WorkspaceState) {
 
 export function newConversation() {
   update((prev) => {
+    // A new chat starts on whichever connection settings names as the default.
+    const activeConnectionId = getDefaultConnectionId();
+
     // Reuse an untouched conversation instead of piling up empty ones.
     const existingEmpty = prev.conversations.find((c) => c.messages.length === 0);
     if (existingEmpty) {
-      return { ...prev, activeConversationId: existingEmpty.id };
+      return {
+        ...prev,
+        activeConnectionId,
+        activeConversationId: existingEmpty.id,
+      };
     }
     const conversation = createConversation();
     return {
       ...prev,
+      activeConnectionId,
       conversations: [conversation, ...prev.conversations],
       activeConversationId: conversation.id,
     };
