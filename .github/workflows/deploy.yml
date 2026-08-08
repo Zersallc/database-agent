@@ -69,6 +69,7 @@ jobs:
             --cpu=1 \
             --port=8080 \
             --set-env-vars="NODE_ENV=production,AUTH_TRUST_HOST=true" \
+            --set-env-vars="INSTANCE_CONNECTION_NAME=syslab-database:europe-west1:syslab-main-db" \
             --set-env-vars="AUTH_SECRET=${{ secrets.AUTH_SECRET }}" \
             --set-env-vars="DATABASE_URL=${{ secrets.DATABASE_URL }}" \
             --set-env-vars="PGHOST=${{ secrets.PGHOST }},PGPORT=${{ secrets.PGPORT }},PGDATABASE=${{ secrets.PGDATABASE }}" \
