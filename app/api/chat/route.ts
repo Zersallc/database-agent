@@ -1,105 +1,164 @@
-import { NextRequest, NextResponse } from "next/server";
+/**
+ * `POST /api/chat` — deprecated.
+ *
+ * This was the workspace's only endpoint before the v1 API existed, and the
+ * chat UI still calls it. It keeps working, unchanged, for the whole runway.
+ *
+ * The replacement is `POST /api/v1/conversations/{id}/runs`, which does
+ * everything this does plus persistence, a trace with query IDs, streaming, and
+ * idempotency. The migration is in docs/api/versioning.md.
+ *
+ * Two things this deliberately does *not* do: change its request or response
+ * shape, and start writing conversation records. A deprecated endpoint that
+ * quietly alters its behavior is worse than one that is simply old — the whole
+ * point of the runway is that nothing breaks until the sunset date.
+ */
 
-type Attachment = { name: string; mimeType: string };
+import { runAgent } from "@/lib/agent";
+import { authenticate } from "@/lib/api/auth";
+import {
+  deprecationHeaders,
+  recordDeprecatedUsage,
+  type Deprecation,
+} from "@/lib/api/deprecation";
+import { toApiError } from "@/lib/api/errors";
+import { newRequestId } from "@/lib/api/ids";
+import { readJson } from "@/lib/api/validate";
+import { getSchema, type ConnectionDoc } from "@/lib/services/connections";
+import { buildAgentContext } from "@/lib/services/playbook";
+import { runQuery, toQueryResult } from "@/lib/services/queries";
+import { stores } from "@/lib/providers";
 
-type Message = {
-  role: "user" | "assistant";
-  content: string;
-  attachments?: Attachment[];
+export const runtime = "nodejs";
+export const maxDuration = 300;
+
+const DEPRECATION: Deprecation = {
+  deprecatedAt: new Date("2026-08-08T00:00:00Z"),
+  // Nine months. Long enough that anyone who integrated against this has time
+  // to move without dropping planned work, which is the only kind of runway
+  // that actually keeps the promise.
+  sunsetAt: new Date("2027-05-08T00:00:00Z"),
+  successor: "/api/v1/conversations/{conversation_id}/runs",
+  reason:
+    "POST /api/chat is deprecated; use POST /api/v1/conversations/{conversation_id}/runs. Sunset 2027-05-08.",
 };
 
-type ChatRequest = {
-  messages: Message[];
+type LegacyMessage = {
+  role: "user" | "assistant";
+  content: string;
+  attachments?: { name: string; mimeType: string }[];
+};
+
+type LegacyRequest = {
+  messages?: LegacyMessage[];
   connectionId?: string;
   playbookContext?: string;
   enabledSkills?: string[];
-  responseDetail?: string;
+  responseDetail?: "concise" | "balanced" | "detailed";
 };
 
-// Exercises every content handler the frontend knows how to render.
-const DEMO_REPLY = `Database and AI integration isn't connected yet, so here's a demo of the rendering pipeline instead.
+export async function POST(request: Request): Promise<Response> {
+  const requestId = newRequestId();
+  const headers = {
+    ...deprecationHeaders(DEPRECATION),
+    "X-Request-Id": requestId,
+    "Cache-Control": "no-store",
+  };
 
-\`\`\`status
-{"title": "How I got this", "steps": [{"label": "Connected to database", "status": "done"}, {"label": "Found relevant tables", "status": "done"}, {"label": "Ran query", "status": "done"}, {"label": "Created visualization", "status": "done"}]}
-\`\`\`
+  try {
+    const principal = await authenticate(request);
+    recordDeprecatedUsage("POST /api/chat", DEPRECATION, {
+      requestId,
+      tenantId: principal.tenantId,
+      userAgent: request.headers.get("user-agent"),
+    });
 
-**SQL** — press Execute to run it against the mock executor.
+    const payload = (await readJson(request)) as LegacyRequest;
+    const messages = payload.messages ?? [];
+    const question = messages[messages.length - 1]?.content ?? "";
+    const history = messages.slice(0, -1).map((message) => ({
+      role: message.role,
+      content: message.content,
+    }));
 
-\`\`\`sql
-SELECT region, plan, COUNT(*) AS customers, SUM(amount) AS revenue
-FROM orders
-JOIN customers USING (customer_id)
-WHERE created_at >= NOW() - INTERVAL '90 days'
-GROUP BY region, plan
-ORDER BY revenue DESC;
-\`\`\`
+    const connection = await resolveConnection(principal.tenantId, payload.connectionId);
 
-**Table**
-\`\`\`table
-{"columns": ["Metric", "Value"], "rows": [["Active users", 128], ["Revenue", "$4,200"], ["Errors (24h)", 3]]}
-\`\`\`
+    // The legacy client assembles the playbook itself and sends it along. Honor
+    // what it sent; fall back to the server-side playbook when it sent nothing.
+    const playbookContext =
+      payload.playbookContext?.trim() || (await buildAgentContext(principal.tenantId));
 
-**Chart**
-\`\`\`chart
-{"xAxis": {"type": "category", "data": ["Mon", "Tue", "Wed", "Thu", "Fri"]}, "yAxis": {"type": "value"}, "series": [{"type": "bar", "data": [12, 19, 8, 15, 22], "itemStyle": {"color": "#008CF0"}}]}
-\`\`\`
+    let schema = null;
+    if (connection) {
+      try {
+        schema = (await getSchema(principal.tenantId, connection)).tables;
+      } catch {
+        schema = [];
+      }
+    }
 
-**Diagram**
-\`\`\`mermaid
-graph TD
-  A[Question] --> B[Database Agent]
-  B --> C[SQL Query]
-  C --> D[Results]
-\`\`\`
+    let reply = "";
+    for await (const event of runAgent({
+      question,
+      history,
+      playbookContext,
+      responseDetail: payload.responseDetail ?? "balanced",
+      connection: connection
+        ? {
+            name: connection.name,
+            engine: connection.engine,
+            schema,
+            execute: async (sql: string) => {
+              const query = await runQuery(principal.tenantId, connection, {
+                sql,
+                userId: principal.userId,
+              });
+              if (query.status === "failed") {
+                throw new Error(query.error?.message ?? "The query failed.");
+              }
+              return { queryId: query.id, result: toQueryResult(query) };
+            },
+          }
+        : null,
+    })) {
+      if (event.type === "completed") reply = event.content;
+      if (event.type === "failed") throw event.error;
+    }
 
-**Workflow**
-\`\`\`flow
-{"nodes": [{"id": "1", "position": {"x": 0, "y": 60}, "data": {"label": "User Question"}}, {"id": "2", "position": {"x": 220, "y": 60}, "data": {"label": "Database Agent"}}, {"id": "3", "position": {"x": 440, "y": 60}, "data": {"label": "SQL Query"}}, {"id": "4", "position": {"x": 660, "y": 60}, "data": {"label": "Results"}}], "edges": [{"id": "e1-2", "source": "1", "target": "2"}, {"id": "e2-3", "source": "2", "target": "3"}, {"id": "e3-4", "source": "3", "target": "4"}]}
-\`\`\`
+    return Response.json({ reply }, { headers });
+  } catch (error) {
+    const apiError = toApiError(error);
+    // The legacy shape is `{reply}`, and the old client renders whatever it
+    // gets. Returning the error as a reply keeps a failure visible in the UI
+    // instead of showing the client's generic "something went wrong".
+    return Response.json(
+      { reply: `**Something went wrong.**\n\n${apiError.message}`, error: apiError.toBody(requestId) },
+      { status: apiError.status, headers }
+    );
+  }
+}
 
-**Diff**
-\`\`\`diff
-{"language": "sql", "title": "Added the 90-day window", "original": "SELECT region, COUNT(*)\\nFROM orders\\nGROUP BY region;", "modified": "SELECT region, COUNT(*)\\nFROM orders\\nWHERE created_at >= NOW() - INTERVAL '90 days'\\nGROUP BY region;"}
-\`\`\`
+/**
+ * The legacy client sends hardcoded connection IDs from its mock data, which do
+ * not exist server-side. Rather than failing, fall back to the workspace's first
+ * connection — which on a fresh install is the sample dataset, so the demo keeps
+ * working exactly as it did.
+ */
+async function resolveConnection(
+  tenantId: string,
+  connectionId?: string
+): Promise<ConnectionDoc | null> {
+  const { documents } = stores();
 
-**File**
-\`\`\`file
-{"name": "regional-revenue-q3.csv", "type": "csv", "size": "18 KB"}
-\`\`\`
-`;
+  if (connectionId) {
+    const exact = await documents.get<ConnectionDoc>("connections", tenantId, connectionId);
+    if (exact) return exact;
+  }
 
-export async function POST(req: NextRequest) {
-  const {
-    messages,
-    playbookContext = "",
-    enabledSkills = [],
-    responseDetail,
-  } = (await req.json()) as ChatRequest;
-
-  const last = messages[messages.length - 1];
-  const lastUserMessage = last?.content ?? "";
-  const attachments = last?.attachments ?? [];
-
-  // Echoes back what the frontend sent so the playbook and attachment wiring is
-  // visible end to end. A real agent would put this in the model's context
-  // instead of the reply.
-  const received = [
-    enabledSkills.length > 0
-      ? `**Playbook** — ${playbookContext.length.toLocaleString()} characters, skills active: ${enabledSkills.join(", ")}.`
-      : "**Playbook** — no skills enabled.",
-    responseDetail ? `**Response detail** — ${responseDetail}.` : null,
-    attachments.length > 0
-      ? `**Attachments** — ${attachments.map((a) => a.name).join(", ")}.`
-      : null,
-  ]
-    .filter(Boolean)
-    .join("\n\n");
-
-  // TODO: replace with a real LLM call + database query once credentials are provided.
-  const asked = lastUserMessage
-    ? `You asked: "${lastUserMessage}"`
-    : "You sent an image with no question.";
-  const reply = `${asked}\n\n${received}\n\n---\n\n${DEMO_REPLY}`;
-
-  return NextResponse.json({ reply });
+  const [first] = await documents.list<ConnectionDoc>("connections", tenantId, {
+    orderBy: "created_at",
+    order: "asc",
+    limit: 1,
+  });
+  return first ?? null;
 }

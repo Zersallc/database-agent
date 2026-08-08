@@ -6,7 +6,10 @@
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
-    "lint": "eslint"
+    "lint": "eslint",
+    "test": "node scripts/run-tests.mjs",
+    "api:check": "node scripts/check-api-compat.mjs",
+    "api:release": "node scripts/check-api-compat.mjs --release"
   },
   "dependencies": {
     "@base-ui/react": "^1.7.0",
@@ -38,7 +41,9 @@
     "@types/react-dom": "^19",
     "eslint": "^9",
     "eslint-config-next": "16.3.0",
+    "js-yaml": "^4.1.0",
     "tailwindcss": "^4",
+    "tsx": "^4.23.11",
     "typescript": "^5"
   }
 }
