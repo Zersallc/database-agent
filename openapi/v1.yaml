@@ -83,6 +83,8 @@ tags:
     description: Health and caller identity.
   - name: Connections
     description: Database connections the agent can query.
+  - name: Model providers
+    description: Which AI answers, and with which credential.
   - name: Queries
     description: Direct SQL execution against a connection.
   - name: Conversations
@@ -306,6 +308,168 @@ paths:
         "401": { $ref: "#/components/responses/Unauthorized" }
         "404": { $ref: "#/components/responses/NotFound" }
         "502": { $ref: "#/components/responses/UpstreamError" }
+        default: { $ref: "#/components/responses/Error" }
+
+  # --------------------------------------------------------------------------
+  # Model providers
+  # --------------------------------------------------------------------------
+  /v1/model-providers:
+    get:
+      operationId: listModelProviders
+      tags: [Model providers]
+      summary: List configured model providers
+      description: |
+        Required scope: `models:read`.
+
+        The response also carries `presets` — the catalogue of known providers
+        with their base URLs and suggested models — so a client does not have to
+        hardcode values that would then drift from the server's.
+
+        API keys are never included. `key_hint` shows the last four characters of
+        the stored key so a person can tell which one is installed.
+      parameters:
+        - $ref: "#/components/parameters/Limit"
+        - $ref: "#/components/parameters/Cursor"
+        - $ref: "#/components/parameters/Order"
+      responses:
+        "200":
+          description: A page of model providers, plus the preset catalogue
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/ListEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        type: array
+                        items: { $ref: "#/components/schemas/ModelProvider" }
+                      presets:
+                        type: array
+                        items: { $ref: "#/components/schemas/ModelProviderPreset" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        default: { $ref: "#/components/responses/Error" }
+    post:
+      operationId: createModelProvider
+      tags: [Model providers]
+      summary: Configure a model provider
+      description: |
+        Required scope: `models:write` — admin only, because the choice sets what
+        every question costs and which company receives the workspace's schema
+        and questions.
+
+        `api_key` is write-only. It goes to the configured secret store and is
+        never returned by this or any other endpoint. The first provider added
+        becomes the default.
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/ModelProviderCreate" }
+      responses:
+        "201":
+          description: Created
+          headers:
+            Location:
+              description: URL of the created provider.
+              schema: { type: string }
+            Idempotent-Replay: { $ref: "#/components/headers/Idempotent-Replay" }
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ModelProvider" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "409": { $ref: "#/components/responses/Conflict" }
+        default: { $ref: "#/components/responses/Error" }
+
+  /v1/model-providers/{model_provider_id}:
+    parameters:
+      - name: model_provider_id
+        in: path
+        required: true
+        schema: { type: string, examples: ["mprov_01HZX9K2"] }
+    get:
+      operationId: getModelProvider
+      tags: [Model providers]
+      summary: Retrieve a model provider
+      description: "Required scope: `models:read`."
+      responses:
+        "200":
+          description: The model provider
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ModelProvider" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        default: { $ref: "#/components/responses/Error" }
+    patch:
+      operationId: updateModelProvider
+      tags: [Model providers]
+      summary: Update a model provider, rotate its key, or make it the default
+      description: |
+        Required scope: `models:write`.
+
+        Omit `api_key` to leave the stored key untouched. Since the key cannot be
+        read back, a form that round-tripped it would overwrite the real key with
+        a mask.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/ModelProviderUpdate" }
+      responses:
+        "200":
+          description: The updated model provider
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ModelProvider" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        default: { $ref: "#/components/responses/Error" }
+    delete:
+      operationId: deleteModelProvider
+      tags: [Model providers]
+      summary: Remove a model provider
+      description: |
+        Required scope: `models:write`. Deletes the stored key too. If this was
+        the default, the oldest remaining provider becomes the new default.
+      responses:
+        "204":
+          description: Deleted. Deleting an already-deleted provider is also a 204.
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        default: { $ref: "#/components/responses/Error" }
+
+  /v1/model-providers/{model_provider_id}/test:
+    parameters:
+      - name: model_provider_id
+        in: path
+        required: true
+        schema: { type: string, examples: ["mprov_01HZX9K2"] }
+    post:
+      operationId: testModelProvider
+      tags: [Model providers]
+      summary: Check the credential and model without generating tokens
+      description: |
+        Required scope: `models:read`.
+
+        Always returns `200` with the outcome in the body — a rejected key is a
+        fact about the provider, not a malformed request.
+      responses:
+        "200":
+          description: Probe result
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ModelProviderTestResult" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "429": { $ref: "#/components/responses/RateLimited" }
         default: { $ref: "#/components/responses/Error" }
 
   # --------------------------------------------------------------------------
@@ -1243,6 +1407,132 @@ components:
                     nullable: { type: boolean }
                     primary_key: { type: boolean }
                     description: { type: [string, "null"] }
+
+    # ------------------------------------------------------------------------
+    # Model providers
+    # ------------------------------------------------------------------------
+    ModelProviderKind:
+      type: string
+      description: |
+        The wire protocol the adapter speaks. `openai_compatible` covers every
+        provider implementing OpenAI's Chat Completions format — Qwen, DeepSeek,
+        Groq, Mistral, OpenRouter, Together, Ollama, and OpenAI itself.
+      enum: [anthropic, openai_compatible]
+
+    ModelProviderStatus:
+      type: string
+      description: Result of the last credential check. `unknown` until tested.
+      enum: [unknown, ready, error]
+
+    ModelProviderPreset:
+      type: object
+      description: |
+        A known provider, with the values needed to configure it. Presets are
+        added within v1 as they are supported, so treat the list as open.
+      required: [id, label, kind, suggested_model, requires_base_url, key_optional]
+      properties:
+        id: { type: string, examples: ["qwen"] }
+        label: { type: string, examples: ["Qwen (Alibaba DashScope)"] }
+        kind: { $ref: "#/components/schemas/ModelProviderKind" }
+        base_url:
+          type: [string, "null"]
+          description: Default endpoint. Null when the caller must supply one.
+        suggested_model:
+          type: string
+          description: |
+            A starting point, not a guarantee — providers rename and retire
+            models on their own schedule, which is why `model` is required on
+            create rather than defaulted.
+        docs_url: { type: string }
+        requires_base_url: { type: boolean }
+        key_optional:
+          type: boolean
+          description: True for local runtimes that need no credential.
+        note: { type: [string, "null"] }
+
+    ModelProvider:
+      type: object
+      required:
+        [id, object, name, provider, kind, model, is_default, status, has_key, created_at, updated_at]
+      properties:
+        id: { type: string, examples: ["mprov_01HZX9K2"] }
+        object: { type: string, const: model_provider }
+        name: { type: string, examples: ["Qwen (Alibaba DashScope) · qwen-max"] }
+        provider:
+          type: string
+          description: Preset ID this was configured from.
+          examples: ["qwen"]
+        kind: { $ref: "#/components/schemas/ModelProviderKind" }
+        model: { type: string, examples: ["qwen-max"] }
+        base_url: { type: [string, "null"] }
+        is_default:
+          type: boolean
+          description: Whether agent runs in this workspace use this provider.
+        status: { $ref: "#/components/schemas/ModelProviderStatus" }
+        status_checked_at: { type: [string, "null"], format: date-time }
+        status_detail: { type: [string, "null"] }
+        has_key: { type: boolean }
+        key_hint:
+          type: [string, "null"]
+          description: |
+            Last four characters of the stored key, masked. Enough to tell which
+            key is installed; the key itself is never returned.
+          examples: ["••••3f9a"]
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+
+    ModelProviderCreate:
+      type: object
+      required: [provider, model]
+      properties:
+        provider:
+          type: string
+          description: A preset ID from the `presets` list.
+          examples: ["qwen"]
+        model: { type: string, minLength: 1, maxLength: 200 }
+        name: { type: string, minLength: 1, maxLength: 120 }
+        base_url:
+          type: string
+          maxLength: 500
+          description: Overrides the preset default. Required when `requires_base_url`.
+        api_key:
+          type: string
+          maxLength: 500
+          description: |
+            Write-only. Stored in the secret store and never returned. Required
+            unless the preset sets `key_optional`.
+        is_default: { type: boolean }
+
+    ModelProviderUpdate:
+      type: object
+      description: |
+        Every field is optional. Omitted fields are left unchanged — in
+        particular, omitting `api_key` keeps the stored key.
+      properties:
+        name: { type: string, minLength: 1, maxLength: 120 }
+        model: { type: string, minLength: 1, maxLength: 200 }
+        base_url: { type: string, maxLength: 500 }
+        api_key:
+          type: string
+          maxLength: 500
+          description: Write-only. Send to rotate the key.
+        is_default: { type: boolean }
+
+    ModelProviderTestResult:
+      type: object
+      required: [model_provider_id, status, checked_at]
+      properties:
+        model_provider_id: { type: string }
+        status: { $ref: "#/components/schemas/ModelProviderStatus" }
+        checked_at: { type: string, format: date-time }
+        latency_ms: { type: [integer, "null"] }
+        detail: { type: [string, "null"] }
+        model_available:
+          type: [boolean, "null"]
+          description: |
+            Whether the model appeared in the provider's catalogue. Null when the
+            provider offers none. False is a warning, not a failure — several
+            providers return only a partial list.
 
     # ------------------------------------------------------------------------
     # Queries

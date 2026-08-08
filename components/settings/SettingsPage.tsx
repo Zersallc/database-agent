@@ -2,6 +2,7 @@
 
 import { PageHeader } from "@/components/app-shell/PageHeader";
 import { useSettings } from "@/lib/settings-store";
+import { ModelProviderSection } from "./ModelProviderSection";
 import {
   AppearanceSection,
   ChatSection,
@@ -25,6 +26,8 @@ export function SettingsPage() {
             </p>
           </div>
 
+          {/* First: without a provider nothing else in the workspace answers. */}
+          <ModelProviderSection />
           <AppearanceSection settings={settings} />
           <ChatSection settings={settings} />
           <ConnectionsSection settings={settings} />

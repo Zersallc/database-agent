@@ -1,6 +1,6 @@
-import { isModelConfigured } from "@/lib/agent";
 import { defineRoute } from "@/lib/api/handler";
 import { providerHealth, providerWarnings } from "@/lib/providers";
+import { environmentClient } from "@/lib/services/model-providers";
 
 export const runtime = "nodejs";
 
@@ -21,6 +21,7 @@ export const GET = defineRoute({
   handler: async () => {
     const providers = await providerHealth();
     const warnings = providerWarnings();
+    const environment = environmentClient();
 
     const checks = [
       ...providers.map((provider) => ({
@@ -30,10 +31,13 @@ export const GET = defineRoute({
       })),
       {
         name: "model_provider",
-        status: isModelConfigured() ? ("ok" as const) : ("degraded" as const),
-        detail: isModelConfigured()
-          ? "configured"
-          : "ANTHROPIC_API_KEY is not set — runs return the setup notice instead of an answer.",
+        // Unauthenticated, so this reports the environment fallback only — a
+        // workspace's own provider is tenant data and needs a credential to
+        // read. `GET /v1/model-providers` is where that lives.
+        status: environment ? ("ok" as const) : ("degraded" as const),
+        detail:
+          environment?.label ??
+          "No environment model provider — workspaces without one configured return the setup notice.",
       },
       ...warnings.map((warning) => ({
         name: "configuration",

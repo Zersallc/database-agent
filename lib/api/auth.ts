@@ -17,6 +17,8 @@ import { stores } from "@/lib/providers";
 export const SCOPES = [
   "connections:read",
   "connections:write",
+  "models:read",
+  "models:write",
   "queries:read",
   "queries:execute",
   "conversations:read",
@@ -37,6 +39,7 @@ export type Role = "admin" | "member" | "viewer";
 
 const READ_SCOPES: Scope[] = [
   "connections:read",
+  "models:read",
   "queries:read",
   "conversations:read",
   "runs:read",
@@ -54,6 +57,9 @@ export const ROLE_SCOPES: Record<Role, Scope[]> = {
   member: [
     ...READ_SCOPES,
     "connections:write",
+    // Not `models:write`. Choosing the model provider sets what every question
+    // in the workspace costs and where its data goes — an admin decision, and
+    // the one place a member's write access deliberately stops.
     "queries:execute",
     "conversations:write",
     "runs:write",
