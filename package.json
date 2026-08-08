@@ -12,7 +12,6 @@
     "@monaco-editor/react": "^4.7.0",
     "@prisma/adapter-pg": "^7.9.1",
     "@prisma/client": "^7.9.1",
-    "@syslab/google-client": "file:C:/Users/sadda/.claude/google-client",
     "@tanstack/react-table": "^8.21.3",
     "@xyflow/react": "^12.11.2",
     "bcryptjs": "^3.0.3",
