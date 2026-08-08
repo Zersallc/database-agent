@@ -80,13 +80,48 @@ account attached to the Cloud Run revision in production,
 | `S3_ENDPOINT` | For S3-compatible stores (MinIO, R2, Ceph) |
 | `S3_PREFIX` | Key prefix |
 
-### Agent
+### Model provider
+
+Configure this in the app — **Settings → Model provider** — rather than here.
+A provider added there is a tenant resource: the key goes to the secret store,
+several can be kept side by side, and switching between them is one click. The
+environment variables are the fallback, used only when a workspace has no
+provider of its own, and exist for deployments configured entirely through env
+(CI, containers).
 
 | Variable | Default | Notes |
 |---|---|---|
-| `ANTHROPIC_API_KEY` | — | Without it, runs return the setup notice instead of an answer |
-| `AGENT_MODEL` | `claude-opus-5` | |
-| `AGENT_EFFORT` | `high` | `low` \| `medium` \| `high` \| `xhigh` \| `max` |
+| `ANTHROPIC_API_KEY` | — | The default provider's key |
+| `MODEL_PROVIDER` | `anthropic` | Preset ID — `qwen`, `openai`, `deepseek`, `groq`, `mistral`, `openrouter`, `together`, `ollama`, `custom` |
+| `MODEL_API_KEY` | — | Key for a non-Anthropic provider |
+| `MODEL_BASE_URL` | preset default | Overrides the endpoint. Required for `custom` |
+| `AGENT_MODEL` | preset suggestion | Must support tool calling, or the agent cannot run SQL |
+| `AGENT_EFFORT` | `high` | Anthropic only: `low` \| `medium` \| `high` \| `xhigh` \| `max` |
+| `AGENT_MAX_TOKENS` | 32000 | |
+| `AGENT_MAX_ITERATIONS` | 12 | Model↔tool round trips before the loop gives up |
+| `MODEL_REQUEST_TIMEOUT_MS` | 300000 | Generous: a slow local model legitimately takes minutes |
+
+Two adapters cover the field. `anthropic` speaks Claude's Messages API through
+the official SDK — the only path with adaptive thinking, effort levels, and
+server-side refusal fallback. `openai_compatible` speaks Chat Completions over
+plain `fetch`, which covers Qwen, OpenAI, DeepSeek, Groq, Mistral, OpenRouter,
+Together and Ollama. Adding an unlisted provider that speaks that format needs
+no code: pick `custom` and give it a base URL.
+
+Only `@anthropic-ai/sdk` is a package. The OpenAI-compatible path deliberately
+has no dependency — the `openai` package would become a hard requirement for
+someone who only ever talks to Qwen, over what is at these endpoints a plain
+documented HTTP contract.
+
+**Not every model can do this job.** The agent answers by calling a `run_sql`
+tool, so a model without tool-calling support will produce prose about SQL it
+never ran. That is the first thing to check when a provider "works" but every
+answer is vague.
+
+### Other agent settings
+
+| Variable | Default | Notes |
+|---|---|---|
 | `BIGQUERY_MAX_BYTES_BILLED` | 1 GiB | Per-query ceiling — a runaway query fails cheaply instead of succeeding expensively |
 
 ### Limits and behavior
@@ -174,9 +209,16 @@ works.
 
 ## Security notes
 
-**Credentials never round-trip.** They are written to the secret store on create
-and read only inside a connector call. No endpoint returns them, including the
-one that accepted them.
+**Credentials never round-trip.** Database credentials and model provider API
+keys are both written to the secret store on create and read only at the moment
+of use. No endpoint returns them, including the one that accepted them. A model
+provider comes back with `key_hint` — the last four characters, masked — which is
+enough to tell which key is installed and useless to anyone who intercepts the
+response.
+
+This is also why a settings form must send `api_key` only when the user typed a
+new one. There is nothing to prefill it with, so a form that round-tripped its
+own mask would overwrite the real key with dots.
 
 **Read-only is enforced twice, and only one of them counts.**
 [`sql-guard.ts`](../../lib/connectors/sql-guard.ts) rejects anything it cannot

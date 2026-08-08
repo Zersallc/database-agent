@@ -17,6 +17,7 @@ export const ID_PREFIX = {
   user: "usr",
   apiKey: "key",
   connection: "conn",
+  modelProvider: "mprov",
   conversation: "conv",
   message: "msg",
   run: "run",

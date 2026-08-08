@@ -25,6 +25,7 @@ import { toApiError } from "@/lib/api/errors";
 import { newRequestId } from "@/lib/api/ids";
 import { readJson } from "@/lib/api/validate";
 import { getSchema, type ConnectionDoc } from "@/lib/services/connections";
+import { resolveModelClient } from "@/lib/services/model-providers";
 import { buildAgentContext } from "@/lib/services/playbook";
 import { runQuery, toQueryResult } from "@/lib/services/queries";
 import { stores } from "@/lib/providers";
@@ -97,12 +98,15 @@ export async function POST(request: Request): Promise<Response> {
       }
     }
 
+    const resolved = await resolveModelClient(principal.tenantId);
+
     let reply = "";
     for await (const event of runAgent({
       question,
       history,
       playbookContext,
       responseDetail: payload.responseDetail ?? "balanced",
+      client: resolved?.client ?? null,
       connection: connection
         ? {
             name: connection.name,

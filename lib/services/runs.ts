@@ -23,6 +23,7 @@ import {
   type Attachment,
   type ConversationDoc,
 } from "./conversations";
+import { resolveModelClient } from "./model-providers";
 import { buildAgentContext } from "./playbook";
 import { runQuery, toQueryResult } from "./queries";
 import { notFound } from "@/lib/api/errors";
@@ -178,12 +179,17 @@ export async function* executeRun(
     let failure: ApiError | null = null;
     const steps: AgentStep[] = [];
 
+    // Resolved per run rather than cached: rotating a key or switching provider
+    // in settings must take effect on the next question, not the next deploy.
+    const resolved = await resolveModelClient(tenantId);
+
     for await (const event of runAgent({
       question: input.content,
       history,
       playbookContext,
       responseDetail: input.responseDetail,
       connection: agentConnection,
+      client: resolved?.client ?? null,
     })) {
       if (event.type === "step") {
         steps.push(event.step);

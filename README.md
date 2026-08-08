@@ -11,8 +11,14 @@ guide and [`openapi/v1.yaml`](openapi/v1.yaml) for the contract itself.
 
 **It runs with no configuration.** Storage, secrets, and the model provider all
 default to in-memory or unconfigured, and the workspace seeds itself on first
-request. Set `ANTHROPIC_API_KEY` to get real answers; attach a real database to
-query one. Without either, the sample dataset and the rendering demo still work.
+request. Add a model provider under **Settings → Model provider** to get real
+answers, and attach a database to query one. Without either, the sample dataset
+and the rendering demo still work.
+
+The agent is not tied to one AI. Claude, Qwen, OpenAI, DeepSeek, Groq, Mistral,
+OpenRouter, Together and Ollama are all supported — two adapters, one for
+Claude's Messages API and one for the OpenAI Chat Completions format that the
+rest implement — so you can add several and switch between them to compare.
 
 The chat UI still calls the older `/api/chat`, which now runs the real agent and
 is deprecated with a runway to 2027-05-08 — see
@@ -139,8 +145,10 @@ hooks/                    color-scheme and viewport hooks
 - **The chat UI still talks to `/api/chat`** and keeps conversations in
   `localStorage`. Moving it onto `/api/v1` — server-side conversations, streamed
   runs, the trace with query IDs — is the next piece of work.
-- **API key issuance.** Keys are looked up and enforced, but there is no endpoint
-  that mints one yet; development uses open access to the local workspace.
+- **API key issuance.** Workspace keys are looked up and enforced, but there is
+  no endpoint that mints one yet; development uses open access to the local
+  workspace. (This is about keys *for* this API — the keys for Claude, Qwen and
+  friends are configurable under Settings → Model provider.)
 - **Snowflake and Azure Blob Storage.** Both are one interface implementation
   away. Neither is listed in the contract until its driver works.
 - Table grouping, and real CSV/Excel/PDF parsing in the file handler.

@@ -6,38 +6,30 @@
  * loop yields events as it goes so a streaming client can show the work
  * happening instead of a spinner.
  *
- * Why a manual loop rather than the SDK's tool runner: every tool call here has
+ * This file is provider-agnostic. It speaks the normalized vocabulary in
+ * `providers/types.ts` — messages, tool calls, text deltas, a stop reason — and
+ * an adapter translates for Claude, Qwen, or anything else OpenAI-compatible.
+ * Swapping providers must not change how the agent reasons, only who answers.
+ *
+ * Why a manual loop rather than an SDK's tool runner: every tool call here has
  * to become two externally visible things — a `RunStep` in the trace and a
  * persisted `Query` row the reader can open later. That bookkeeping sits
- * naturally in an explicit loop and awkwardly in the runner's per-turn hooks.
- *
- * The SDK is an optional dependency, like every other provider. A deployment
- * without a model key still serves the workspace; it just answers with the
- * setup notice.
+ * naturally in an explicit loop and awkwardly in a runner's per-turn hooks, and
+ * no runner spans both wire formats anyway.
  */
 
 import { ApiError } from "@/lib/api/errors";
 import type { QueryResult, SchemaTable } from "@/lib/connectors";
-import { optionalModule } from "@/lib/providers/optional-module";
+import { MissingModuleError } from "@/lib/providers/optional-module";
 import { DEMO_REPLY } from "./demo-reply";
 import { buildSystemPrompt, type ResponseDetail } from "./prompt";
+import { ModelProviderError } from "./providers";
+import type { ModelClient, ModelMessage, ModelTurn, ToolDefinition } from "./providers";
 
-/* eslint-disable @typescript-eslint/no-explicit-any -- the SDK is loaded at runtime */
-
-/**
- * Model defaults.
- *
- * Opus 5 with adaptive thinking: the work is multi-step (read schema, write
- * SQL, read an error, fix it) and that is exactly where thinking earns its
- * cost. `high` effort is the floor for anything intelligence-sensitive, and
- * writing correct SQL against an unfamiliar schema qualifies.
- */
-const MODEL = process.env.AGENT_MODEL ?? "claude-opus-5";
-const EFFORT = process.env.AGENT_EFFORT ?? "high";
-const MAX_TOKENS = 32000;
+const MAX_TOKENS = Number(process.env.AGENT_MAX_TOKENS ?? 32000);
 
 /** Ceiling on model↔tool round trips, so a confused run cannot spin forever. */
-const MAX_ITERATIONS = 12;
+const MAX_ITERATIONS = Number(process.env.AGENT_MAX_ITERATIONS ?? 12);
 
 /** Rows handed back to the model per query. The full result still reaches the user. */
 const ROWS_IN_CONTEXT = 100;
@@ -80,20 +72,23 @@ export type AgentRunInput = {
   playbookContext: string;
   responseDetail: ResponseDetail;
   connection: AgentConnection | null;
+  /**
+   * The configured provider. Null means none is set up, and the run returns the
+   * setup notice rather than failing — an unconfigured workspace should still
+   * demonstrate itself.
+   */
+  client: ModelClient | null;
+  /** Reasoning depth. Only the Anthropic adapter acts on it. */
+  effort?: string;
 };
 
-export function isModelConfigured(): boolean {
-  return Boolean(process.env.ANTHROPIC_API_KEY?.trim() || process.env.ANTHROPIC_AUTH_TOKEN?.trim());
-}
-
-const RUN_SQL_TOOL = {
+const RUN_SQL_TOOL: ToolDefinition = {
   name: "run_sql",
   description:
     "Run a read-only SQL query against the connected database and get the rows back. " +
     "Call this before stating any figure — never answer from memory or from the schema alone. " +
     "One statement per call. If it errors, read the message, fix the query, and call again.",
-  strict: true,
-  input_schema: {
+  parameters: {
     type: "object",
     properties: {
       sql: {
@@ -108,13 +103,7 @@ const RUN_SQL_TOOL = {
     required: ["sql", "purpose"],
     additionalProperties: false,
   },
-} as const;
-
-async function client(): Promise<any> {
-  const mod = await optionalModule("@anthropic-ai/sdk", "the agent");
-  const Anthropic = (mod.default ?? mod.Anthropic) as new (options?: object) => any;
-  return new Anthropic();
-}
+};
 
 export async function* runAgent(input: AgentRunInput): AsyncGenerator<AgentEvent> {
   const steps: AgentStep[] = [];
@@ -124,8 +113,13 @@ export async function* runAgent(input: AgentRunInput): AsyncGenerator<AgentEvent
     return { type: "step", step };
   };
 
-  if (!isModelConfigured()) {
-    yield emit({ label: "Model provider not configured", status: "failed", detail: null, query_id: null });
+  if (!input.client) {
+    yield emit({
+      label: "No model provider configured",
+      status: "failed",
+      detail: "Add one under Settings → Model provider.",
+      query_id: null,
+    });
     yield { type: "completed", content: DEMO_REPLY, steps, model: null, usage: null };
     return;
   }
@@ -139,95 +133,113 @@ export async function* runAgent(input: AgentRunInput): AsyncGenerator<AgentEvent
     schema: input.connection?.schema ?? null,
   });
 
-  const messages: any[] = [
-    ...input.history.map((message) => ({ role: message.role, content: message.content })),
+  const messages: ModelMessage[] = [
+    // Stored history carries no tool calls: the SQL a past turn ran is already
+    // reflected in its text, and replaying tool blocks from storage would need
+    // provider-native payloads we deliberately do not persist.
+    ...input.history.map((message): ModelMessage =>
+      message.role === "user"
+        ? { role: "user", content: message.content }
+        : { role: "assistant", content: message.content, toolCalls: [] }
+    ),
     { role: "user", content: input.question },
   ];
 
+  const tools = input.connection ? [RUN_SQL_TOOL] : [];
   let answer = "";
   let model: string | null = null;
   let inputTokens = 0;
   let outputTokens = 0;
 
   try {
-    const anthropic = await client();
-
     for (let iteration = 0; iteration < MAX_ITERATIONS; iteration++) {
-      const stream = anthropic.beta.messages.stream({
-        model: MODEL,
-        max_tokens: MAX_TOKENS,
-        // Opus 5's classifiers can decline a request outright. Server-side
-        // fallback re-runs it on the recommended model in the same call, so a
-        // benign question that trips a classifier still gets answered.
-        betas: ["server-side-fallback-2026-07-01"],
-        fallbacks: "default",
-        thinking: { type: "adaptive" },
-        output_config: { effort: EFFORT },
-        // The system prompt is stable across every turn of a conversation and
-        // large (it carries the whole schema), so it is the cache breakpoint.
-        system: [{ type: "text", text: system, cache_control: { type: "ephemeral" } }],
-        ...(input.connection ? { tools: [RUN_SQL_TOOL] } : {}),
-        messages,
-      });
+      let turn: ModelTurn | null = null;
 
-      for await (const event of stream) {
-        if (event.type === "content_block_delta" && event.delta?.type === "text_delta") {
-          answer += event.delta.text;
-          yield { type: "delta", text: event.delta.text };
+      for await (const event of input.client.stream({
+        system,
+        messages,
+        tools,
+        maxTokens: MAX_TOKENS,
+        effort: input.effort ?? "high",
+      })) {
+        if (event.type === "text_delta") {
+          answer += event.text;
+          yield { type: "delta", text: event.text };
+        } else {
+          turn = event.turn;
         }
       }
 
-      const message = await stream.finalMessage();
-      model = message.model ?? model;
-      inputTokens += message.usage?.input_tokens ?? 0;
-      outputTokens += message.usage?.output_tokens ?? 0;
+      if (!turn) {
+        throw new ApiError(
+          "upstream_model_error",
+          "The model provider closed the stream without returning a result."
+        );
+      }
 
-      // Check the stop reason before touching content: on a refusal the
-      // content array is empty or partial, and indexing it blindly is the
-      // classic way this breaks in production.
-      if (message.stop_reason === "refusal") {
+      model = turn.model ?? model;
+      inputTokens += turn.usage?.input_tokens ?? 0;
+      outputTokens += turn.usage?.output_tokens ?? 0;
+
+      if (turn.stopReason === "refusal") {
         yield emit({
-          label: "Declined by safety classifiers",
+          label: "Declined by the model provider",
           status: "failed",
-          detail: message.stop_details?.category ?? null,
+          detail: turn.refusalDetail,
           query_id: null,
         });
         throw new ApiError(
           "upstream_model_error",
           "The model declined to answer this request. Rephrasing the question usually resolves it.",
-          { details: { category: message.stop_details?.category ?? null } }
+          { details: { category: turn.refusalDetail } }
         );
       }
 
-      // A server-side tool hit its own iteration cap. Hand the turn back and
-      // let it resume — this is not an error.
-      if (message.stop_reason === "pause_turn") {
-        messages.push({ role: "assistant", content: message.content });
-        continue;
-      }
-
-      if (message.stop_reason !== "tool_use") {
-        yield { type: "completed", content: answer.trim(), steps, model, usage: { input_tokens: inputTokens, output_tokens: outputTokens } };
+      if (turn.stopReason !== "tool_use" || turn.toolCalls.length === 0) {
+        yield {
+          type: "completed",
+          content: answer.trim(),
+          steps,
+          model,
+          usage: { input_tokens: inputTokens, output_tokens: outputTokens },
+        };
         return;
       }
 
-      messages.push({ role: "assistant", content: message.content });
+      messages.push({
+        role: "assistant",
+        content: turn.text,
+        toolCalls: turn.toolCalls,
+        raw: turn.raw,
+      });
 
-      const toolUses = message.content.filter((block: any) => block.type === "tool_use");
-      const results: any[] = [];
-
-      for (const toolUse of toolUses) {
-        if (toolUse.name !== RUN_SQL_TOOL.name || !input.connection) {
-          results.push({
-            type: "tool_result",
-            tool_use_id: toolUse.id,
-            is_error: true,
+      for (const call of turn.toolCalls) {
+        if (call.name !== RUN_SQL_TOOL.name || !input.connection) {
+          messages.push({
+            role: "tool",
+            toolCallId: call.id,
+            toolName: call.name,
             content: "No database is attached to this conversation, so queries cannot be run.",
+            isError: true,
           });
           continue;
         }
 
-        const { sql, purpose } = toolUse.input as { sql: string; purpose: string };
+        const sql = typeof call.input.sql === "string" ? call.input.sql : "";
+        const purpose = typeof call.input.purpose === "string" ? call.input.purpose : "";
+
+        if (!sql.trim()) {
+          // A model that called the tool with no statement gets told so rather
+          // than having the run fail around it.
+          messages.push({
+            role: "tool",
+            toolCallId: call.id,
+            toolName: call.name,
+            content: "The 'sql' argument was empty. Send a single SQL statement.",
+            isError: true,
+          });
+          continue;
+        }
 
         try {
           const { queryId, result } = await input.connection.execute(sql);
@@ -237,10 +249,12 @@ export async function* runAgent(input: AgentRunInput): AsyncGenerator<AgentEvent
             detail: `${result.row_count} row${result.row_count === 1 ? "" : "s"} in ${result.duration_ms}ms`,
             query_id: queryId,
           });
-          results.push({
-            type: "tool_result",
-            tool_use_id: toolUse.id,
+          messages.push({
+            role: "tool",
+            toolCallId: call.id,
+            toolName: call.name,
             content: JSON.stringify(summarize(result)),
+            isError: false,
           });
         } catch (error) {
           const detail = error instanceof Error ? error.message : String(error);
@@ -248,16 +262,15 @@ export async function* runAgent(input: AgentRunInput): AsyncGenerator<AgentEvent
           // Errors go back to the model rather than aborting the run: reading a
           // "column does not exist" and correcting the query is the single most
           // valuable thing this loop does.
-          results.push({
-            type: "tool_result",
-            tool_use_id: toolUse.id,
-            is_error: true,
+          messages.push({
+            role: "tool",
+            toolCallId: call.id,
+            toolName: call.name,
             content: `The query failed: ${detail}`,
+            isError: true,
           });
         }
       }
-
-      messages.push({ role: "user", content: results });
     }
 
     yield emit({
@@ -302,7 +315,15 @@ function summarize(result: QueryResult) {
 function translate(error: unknown): ApiError {
   if (error instanceof ApiError) return error;
 
-  const status = (error as { status?: number }).status;
+  if (error instanceof MissingModuleError) {
+    return new ApiError("provider_unavailable", error.message, {
+      details: { module: error.moduleName },
+      cause: error,
+    });
+  }
+
+  const status =
+    error instanceof ModelProviderError ? error.status : (error as { status?: number }).status;
   const message = error instanceof Error ? error.message : String(error);
 
   if (status === 429) {
@@ -315,7 +336,7 @@ function translate(error: unknown): ApiError {
   if (status === 401 || status === 403) {
     return new ApiError(
       "upstream_model_error",
-      "The configured model credentials were rejected. Check ANTHROPIC_API_KEY.",
+      "The model provider rejected the configured credentials. Check the API key under Settings → Model provider.",
       { cause: error }
     );
   }
@@ -325,3 +346,4 @@ function translate(error: unknown): ApiError {
 }
 
 export type { ResponseDetail } from "./prompt";
+export type { ModelClient } from "./providers";

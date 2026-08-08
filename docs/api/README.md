@@ -176,6 +176,50 @@ magnitude:
 Override per deployment with `RATE_LIMIT_READ`, `RATE_LIMIT_WRITE`,
 `RATE_LIMIT_QUERY`, `RATE_LIMIT_RUN`.
 
+## Choosing which AI answers
+
+`GET /v1/model-providers` lists what the workspace has configured, plus a
+`presets` catalogue of known providers with their base URLs and suggested
+models — so a client never hardcodes values that would drift from the server's.
+
+```bash
+curl -s localhost:3000/api/v1/model-providers | jq '.presets[] | {id, label, base_url}'
+```
+
+Adding one (admin only — the choice sets what every question costs and which
+company receives the workspace's schema and questions):
+
+```bash
+curl -s -X POST localhost:3000/api/v1/model-providers \
+  -H 'content-type: application/json' -H "Idempotency-Key: $(uuidgen)" \
+  -d '{"provider":"qwen","model":"qwen-max","api_key":"sk-..."}' | jq
+```
+
+```bash
+curl -s -X POST localhost:3000/api/v1/model-providers/mprov_.../test | jq
+```
+
+`api_key` is write-only. It goes to the secret store and no endpoint returns it;
+what comes back is `key_hint` — the last four characters, masked — which is
+enough to tell which key is installed. To rotate, `PATCH` a new one. **Omit
+`api_key` on a PATCH to leave the stored key alone**: since it cannot be read
+back, a form that round-tripped its own mask would overwrite the real key.
+
+Two adapters cover the field:
+
+| `kind` | Providers |
+|---|---|
+| `anthropic` | Claude. The only path with adaptive thinking and effort levels |
+| `openai_compatible` | Qwen, OpenAI, DeepSeek, Groq, Mistral, OpenRouter, Together, Ollama, and anything else speaking Chat Completions — use the `custom` preset with a base URL |
+
+The model must support **tool calling**. The agent answers by calling `run_sql`;
+a model without it produces prose about SQL it never ran.
+
+The first provider added becomes the default. `PATCH {"is_default": true}`
+switches, which makes comparing two models on the same question a single call.
+A workspace with none configured falls back to the environment, and with neither
+the agent returns a setup notice rather than an error.
+
 ## Streaming a run
 
 `POST /v1/conversations/{id}/runs` with `"stream": true` returns

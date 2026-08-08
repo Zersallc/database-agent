@@ -23,6 +23,7 @@ export const COLLECTIONS = [
   "users",
   "api_keys",
   "connections",
+  "model_providers",
   "conversations",
   "messages",
   "runs",
