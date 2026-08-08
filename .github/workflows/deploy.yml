@@ -56,7 +56,34 @@ jobs:
           docker push ${{ env.REGISTRY }}/${{ env.PROJECT_ID }}/${{ env.REPOSITORY }}/${{ env.IMAGE }}:latest
 
       - name: Deploy to Cloud Run
+        env:
+          AUTH_SECRET: ${{ secrets.AUTH_SECRET }}
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+          PGHOST: ${{ secrets.PGHOST }}
+          PGPORT: ${{ secrets.PGPORT }}
+          PGDATABASE: ${{ secrets.PGDATABASE }}
+          PGUSER: ${{ secrets.PGUSER }}
+          PGPASSWORD: ${{ secrets.PGPASSWORD }}
         run: |
+          # Secrets are passed via the step's `env:` block and referenced here
+          # as plain shell variables (a single, atomic substitution) rather
+          # than interpolated directly from the secrets context into this
+          # script — the latter gets textually substituted before bash runs,
+          # so any `$` inside the secret's own value (e.g. the DB password)
+          # would get re-parsed as shell syntax.
+          cat > /tmp/env-vars.yaml <<EOF
+          NODE_ENV: "production"
+          AUTH_TRUST_HOST: "true"
+          INSTANCE_CONNECTION_NAME: "syslab-database:europe-west1:syslab-main-db"
+          AUTH_SECRET: "${AUTH_SECRET}"
+          DATABASE_URL: "${DATABASE_URL}"
+          PGHOST: "${PGHOST}"
+          PGPORT: "${PGPORT}"
+          PGDATABASE: "${PGDATABASE}"
+          PGUSER: "${PGUSER}"
+          PGPASSWORD: "${PGPASSWORD}"
+          EOF
+
           gcloud run deploy ${{ env.SERVICE }} \
             --image=${{ env.REGISTRY }}/${{ env.PROJECT_ID }}/${{ env.REPOSITORY }}/${{ env.IMAGE }}:${{ github.sha }} \
             --region=${{ env.REGION }} \
@@ -68,14 +95,10 @@ jobs:
             --memory=1Gi \
             --cpu=1 \
             --port=8080 \
-            --set-env-vars="NODE_ENV=production,AUTH_TRUST_HOST=true" \
-            --set-env-vars="INSTANCE_CONNECTION_NAME=syslab-database:europe-west1:syslab-main-db" \
-            --set-env-vars="AUTH_SECRET=${{ secrets.AUTH_SECRET }}" \
-            --set-env-vars="DATABASE_URL=${{ secrets.DATABASE_URL }}" \
-            --set-env-vars="PGHOST=${{ secrets.PGHOST }},PGPORT=${{ secrets.PGPORT }},PGDATABASE=${{ secrets.PGDATABASE }}" \
-            --set-env-vars="PGUSER=${{ secrets.PGUSER }}" \
-            --set-env-vars="PGPASSWORD=${{ secrets.PGPASSWORD }}" \
+            --env-vars-file=/tmp/env-vars.yaml \
             --add-cloudsql-instances=syslab-database:europe-west1:syslab-main-db
+
+          rm -f /tmp/env-vars.yaml
 
       - name: Route all traffic to latest revision
         run: |
