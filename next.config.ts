@@ -1,6 +1,7 @@
 import type { NextConfig } from "next";
 
 const nextConfig: NextConfig = {
+  output: "standalone",
   turbopack: {
     resolveAlias: {
       // html2canvas v1 throws on modern CSS color functions ("unsupported color
