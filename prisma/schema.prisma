@@ -9,7 +9,10 @@ datasource db {
 model Company {
   id        String   @id @default(cuid())
   name      String
+  country   String?
+  isActive  Boolean  @default(true)
   createdAt DateTime @default(now())
+  updatedAt DateTime @default(now()) @updatedAt
   users     User[]
 
   @@map("companies")
@@ -24,6 +27,14 @@ model User {
   companyId String?
   company   Company? @relation(fields: [companyId], references: [id])
   isActive  Boolean  @default(true)
+
+  /// AES-256-GCM ciphertext (base64), the user's personal AI provider key. Never
+  /// sent to the client — only aiApiKeyHint is. Null means none is set.
+  aiApiKeyEnc  String?
+  /// Last 4 characters, masked, for display only ("••••ab12"). Enough to tell
+  /// which key is installed; useless to anyone who intercepts it.
+  aiApiKeyHint String?
+
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 

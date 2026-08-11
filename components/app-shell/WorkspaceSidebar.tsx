@@ -4,6 +4,7 @@ import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import {
   BookOpenIcon,
+  Building2Icon,
   LogOutIcon,
   MessageSquareIcon,
   PlusIcon,
@@ -39,6 +40,7 @@ const NAV = [
   { href: "/", label: "Chat", icon: SparklesIcon },
   { href: "/playbook", label: "Playbook", icon: BookOpenIcon },
   { href: "/users", label: "Users", icon: UsersIcon, adminOnly: true },
+  { href: "/companies", label: "Companies", icon: Building2Icon, adminOnly: true },
   { href: "/settings", label: "Settings", icon: SettingsIcon },
 ];
 
