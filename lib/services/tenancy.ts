@@ -11,7 +11,7 @@
  * are created by the provisioning path, not here.
  */
 
-import { ROLE_SCOPES, type Principal } from "@/lib/api/auth";
+import { ROLE_SCOPES, type Principal, type Role } from "@/lib/api/auth";
 import { newId } from "@/lib/api/ids";
 import { stores } from "@/lib/providers";
 
@@ -150,6 +150,27 @@ export async function defaultPrincipal(): Promise<Principal> {
     userId: localUserId(),
     role: "admin",
     scopes: ROLE_SCOPES.admin,
+    apiKeyId: null,
+  };
+}
+
+/**
+ * The principal used for a request carrying a valid NextAuth session (a
+ * browser with a logged-in cookie) instead of an API key.
+ *
+ * There is one tenant right now, so every signed-in user resolves into the
+ * same local workspace — that's a deliberate simplification for a
+ * single-company deployment, not a general multi-tenant mapping. Revisit
+ * this the day a second real tenant shows up.
+ */
+export async function sessionPrincipal(userId: string, dbRole: string): Promise<Principal> {
+  await ensureLocalTenant();
+  const role: Role = dbRole === "Admin" ? "admin" : "member";
+  return {
+    tenantId: LOCAL_TENANT_ID,
+    userId,
+    role,
+    scopes: ROLE_SCOPES[role],
     apiKeyId: null,
   };
 }

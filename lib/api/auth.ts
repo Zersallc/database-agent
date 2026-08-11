@@ -123,13 +123,24 @@ export async function authenticate(request: Request): Promise<Principal> {
   const token = bearerToken(request);
 
   if (!token) {
+    // The browser workspace authenticates with a NextAuth session cookie, not
+    // a bearer token — check for one before falling back to open access /
+    // rejecting outright, so a signed-in browser and an API-key client both
+    // resolve to a real Principal through the same gate.
+    const { auth } = await import("@/lib/auth");
+    const session = await auth();
+    if (session?.user?.id) {
+      const { sessionPrincipal } = await import("@/lib/services/tenancy");
+      return sessionPrincipal(session.user.id, session.user.role);
+    }
+
     if (openAccessEnabled()) {
       const { defaultPrincipal } = await import("@/lib/services/tenancy");
       return defaultPrincipal();
     }
     throw new ApiError(
       "unauthorized",
-      "Missing credentials. Send an API key as 'Authorization: Bearer <key>'."
+      "Missing credentials. Send an API key as 'Authorization: Bearer <key>', or sign in to the workspace."
     );
   }
 
