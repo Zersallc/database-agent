@@ -12,6 +12,7 @@
     "api:release": "node scripts/check-api-compat.mjs --release"
   },
   "dependencies": {
+    "@anthropic-ai/sdk": "^0.116.0",
     "@base-ui/react": "^1.7.0",
     "@monaco-editor/react": "^4.7.0",
     "@prisma/adapter-pg": "^7.9.1",
