@@ -24,6 +24,7 @@ import {
   MemoryDocumentStore,
   MemoryKeyValueStore,
 } from "./memory";
+import { PostgresDocumentStore, PostgresSecretStore } from "./postgres";
 import type { BlobStore, DocumentStore, KeyValueStore, SecretStore } from "./types";
 
 export type Stores = {
@@ -58,11 +59,13 @@ function buildDocumentStore(): DocumentStore {
   switch (env("METADATA_DRIVER") ?? "memory") {
     case "firestore":
       return new FirestoreDocumentStore(firestoreConfig());
+    case "postgres":
+      return new PostgresDocumentStore();
     case "memory":
       return new MemoryDocumentStore();
     default:
       throw new Error(
-        `Unknown METADATA_DRIVER '${env("METADATA_DRIVER")}'. Supported: memory, firestore.`
+        `Unknown METADATA_DRIVER '${env("METADATA_DRIVER")}'. Supported: memory, firestore, postgres.`
       );
   }
 }
@@ -107,11 +110,13 @@ function buildSecretStore(): SecretStore {
         projectId: required("GOOGLE_CLOUD_PROJECT", "gcp-secret-manager"),
         prefix: env("SECRET_MANAGER_PREFIX"),
       });
+    case "postgres":
+      return new PostgresSecretStore();
     case "env":
       return new EnvSecretStore();
     default:
       throw new Error(
-        `Unknown SECRET_DRIVER '${env("SECRET_DRIVER")}'. Supported: env, gcp-secret-manager.`
+        `Unknown SECRET_DRIVER '${env("SECRET_DRIVER")}'. Supported: env, gcp-secret-manager, postgres.`
       );
   }
 }

@@ -40,3 +40,36 @@ model User {
 
   @@map("users")
 }
+
+/// Generic JSON document store backing lib/providers' DocumentStore interface
+/// (connections, model providers, conversations, playbook, …) when
+/// METADATA_DRIVER=postgres. One row per document; `collection` distinguishes
+/// resource types the same way a Firestore collection or an in-memory Map
+/// bucket would. See lib/providers/postgres.ts.
+model AppDocument {
+  id         String   @id @default(cuid())
+  collection String
+  tenantId   String
+  docId      String
+  data       Json
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @default(now()) @updatedAt
+
+  @@unique([collection, tenantId, docId])
+  @@index([collection, tenantId])
+  @@map("app_documents")
+}
+
+/// Encrypted key/value secret store backing lib/providers' SecretStore
+/// interface (connection passwords, model-provider API keys) when
+/// SECRET_DRIVER=postgres. Same AES-256-GCM scheme as User.aiApiKeyEnc
+/// (lib/crypto.ts) — the plaintext exists only at write time and at the
+/// moment a connector actually needs it.
+model AppSecret {
+  handle    String   @id
+  valueEnc  String
+  createdAt DateTime @default(now())
+  updatedAt DateTime @default(now()) @updatedAt
+
+  @@map("app_secrets")
+}

@@ -74,6 +74,8 @@ jobs:
           cat > /tmp/env-vars.yaml <<EOF
           NODE_ENV: "production"
           AUTH_TRUST_HOST: "true"
+          METADATA_DRIVER: "postgres"
+          SECRET_DRIVER: "postgres"
           INSTANCE_CONNECTION_NAME: "syslab-database:europe-west1:syslab-main-db"
           AUTH_SECRET: "${AUTH_SECRET}"
           DATABASE_URL: "${DATABASE_URL}"
