@@ -11,8 +11,12 @@ function buildDatabaseUrl(): string | undefined {
     return DATABASE_URL;
   }
 
+  // .env.local escapes `$` as `\$` so @next/env's dotenv-expand (used by the
+  // Next.js app at runtime) doesn't treat it as a variable reference. Plain
+  // `dotenv` (used here) never expands in the first place, so it never
+  // un-escapes either — do that ourselves before the password is used.
   const user = encodeURIComponent(PGUSER);
-  const pass = encodeURIComponent(PGPASSWORD);
+  const pass = encodeURIComponent(PGPASSWORD.replace(/\\\$/g, "$"));
 
   // Cloud Run: connect through the Cloud SQL Auth Proxy socket mounted via
   // --add-cloudsql-instances, which bypasses the public-IP authorized-networks

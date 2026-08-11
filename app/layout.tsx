@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 import { Geist, Geist_Mono } from "next/font/google";
+import { Toaster } from "sonner";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { ThemeScript } from "@/components/theme/ThemeScript";
 import { AppShell } from "@/components/app-shell/AppShell";
@@ -35,6 +36,7 @@ export default function RootLayout({ children }: LayoutProps<"/">) {
         <AuthSessionProvider>
           <TooltipProvider>
             <AppShell>{children}</AppShell>
+            <Toaster position="top-right" richColors closeButton />
           </TooltipProvider>
         </AuthSessionProvider>
       </body>
