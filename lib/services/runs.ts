@@ -181,7 +181,7 @@ export async function* executeRun(
 
     // Resolved per run rather than cached: rotating a key or switching provider
     // in settings must take effect on the next question, not the next deploy.
-    const resolved = await resolveModelClient(tenantId);
+    const resolved = await resolveModelClient(tenantId, userId);
 
     for await (const event of runAgent({
       question: input.content,

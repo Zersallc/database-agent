@@ -13,6 +13,8 @@
 import { ApiError, notFound } from "@/lib/api/errors";
 import { newId } from "@/lib/api/ids";
 import { buildPage, type ListParams, type Page } from "@/lib/api/pagination";
+import { prisma } from "@/lib/db";
+import { decryptSecret } from "@/lib/crypto";
 import {
   createModelClient,
   findPreset,
@@ -315,20 +317,56 @@ export async function testModelProvider(tenantId: string, doc: ModelProviderDoc)
 }
 
 /**
- * The client the agent should use for this workspace.
+ * A client built from a user's own AI provider key (User.aiApiKeyEnc in
+ * Postgres — see lib/crypto.ts), rather than a workspace-level provider.
  *
- * Order: the workspace's default provider, then any configured provider, then
- * the environment. The environment fallback is what keeps a deployment that
- * only ever set `ANTHROPIC_API_KEY` working untouched — configuring a provider
- * in the UI is an upgrade, not a migration.
+ * Assumes Anthropic: the per-user key field doesn't carry a provider
+ * selector today, and that's the only provider anyone has asked for it to
+ * hold so far. Revisit if a second provider needs a personal key too.
+ */
+async function personalModelClient(userId: string): Promise<{
+  client: ModelClient;
+  source: "personal";
+  label: string;
+} | null> {
+  const user = await prisma.user.findUnique({
+    where: { id: userId },
+    select: { aiApiKeyEnc: true },
+  });
+  if (!user?.aiApiKeyEnc) return null;
+
+  const apiKey = decryptSecret(user.aiApiKeyEnc);
+  const preset = findPreset("anthropic");
+  if (!preset) return null;
+
+  return {
+    client: createModelClient("anthropic", { apiKey, baseUrl: null, model: preset.suggestedModel }),
+    source: "personal",
+    label: `Personal Anthropic key (${preset.suggestedModel})`,
+  };
+}
+
+/**
+ * The client the agent should use for this request.
+ *
+ * Order: the signed-in user's own key (if they have one set), then the
+ * workspace's default provider, then any configured provider, then the
+ * environment. The environment fallback is what keeps a deployment that only
+ * ever set `ANTHROPIC_API_KEY` working untouched — configuring a provider in
+ * the UI is an upgrade, not a migration.
  *
  * Null means nothing is configured, and the agent answers with the setup notice.
  */
-export async function resolveModelClient(tenantId: string): Promise<{
+export async function resolveModelClient(tenantId: string, userId?: string): Promise<{
   client: ModelClient;
-  source: "workspace" | "environment";
+  source: "personal" | "workspace" | "environment";
   label: string;
 } | null> {
+  if (userId) {
+    const personal = await personalModelClient(userId);
+    if (personal) return personal;
+  }
+
   const configured = await stores().documents.list<ModelProviderDoc>(
     "model_providers",
     tenantId,
