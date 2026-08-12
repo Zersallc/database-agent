@@ -224,12 +224,25 @@ export function ChatWorkspace() {
           ) : (
             <div className="flex flex-col gap-5">
               <AnimatePresence initial={false}>
-                {messages.map((message) => (
-                  <MessageBubble key={message.id} message={message} />
-                ))}
+                {messages
+                  // An empty streaming placeholder has nothing to show yet —
+                  // the status block below is what tells the user something
+                  // is happening. Once text starts arriving it renders normally.
+                  .filter((message) => message.content || !message.streaming)
+                  .map((message) => (
+                    <MessageBubble key={message.id} message={message} />
+                  ))}
               </AnimatePresence>
 
-              {running && liveSteps.length > 0 && <AgentStatusBlock steps={liveSteps} />}
+              {running && (
+                <AgentStatusBlock
+                  steps={
+                    liveSteps.length > 0
+                      ? liveSteps
+                      : [{ label: "Thinking…", status: "active" }]
+                  }
+                />
+              )}
             </div>
           )}
           <div ref={bottomRef} />
