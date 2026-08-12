@@ -4,7 +4,6 @@ import { useEffect, useRef, useState } from "react";
 import { AnimatePresence } from "framer-motion";
 import { Badge } from "@/components/ui/badge";
 import { PageHeader } from "@/components/app-shell/PageHeader";
-import { buildAgentContext, usePlaybook } from "@/lib/playbook-store";
 import { useSettings } from "@/lib/settings-store";
 import { useWorkspace } from "@/lib/workspace-store";
 import type { Attachment, Message } from "@/lib/workspace";
@@ -33,7 +32,6 @@ function stepsAt(index: number): AgentStep[] {
 
 export function ChatWorkspace() {
   const { activeConversation, activeConnection, appendMessage } = useWorkspace();
-  const playbook = usePlaybook();
   const settings = useSettings();
   const [input, setInput] = useState("");
   const [attachments, setAttachments] = useState<Attachment[]>([]);
@@ -80,9 +78,8 @@ export function ChatWorkspace() {
         body: JSON.stringify({
           messages: history,
           connectionId: activeConnection.id,
-          // Everything the Playbook page assembles travels with the question.
-          playbookContext: buildAgentContext(playbook),
-          enabledSkills: playbook.skills.filter((s) => s.enabled).map((s) => s.name),
+          // The playbook itself is read server-side, from the tenant's own
+          // record — not assembled and sent by the client.
           responseDetail: settings.responseDetail,
         }),
       });

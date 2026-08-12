@@ -1,7 +1,8 @@
 "use client";
 
+import { Button } from "@/components/ui/button";
 import { PageHeader } from "@/components/app-shell/PageHeader";
-import { usePlaybook } from "@/lib/playbook-store";
+import { reloadPlaybook, usePlaybook } from "@/lib/playbook-store";
 import { ContextPreview } from "./ContextPreview";
 import { PlaybookEditor } from "./PlaybookEditor";
 import { SystemPromptCard } from "./SystemPromptCard";
@@ -23,9 +24,24 @@ export function PlaybookPage() {
             </p>
           </div>
 
-          <SystemPromptCard value={playbook.systemPrompt} />
-          <PlaybookEditor playbook={playbook} />
-          <ContextPreview playbook={playbook} />
+          {playbook.loading ? (
+            <p className="py-16 text-center text-sm text-muted-foreground">
+              Loading playbook…
+            </p>
+          ) : playbook.error ? (
+            <div className="flex flex-col items-center gap-3 rounded-lg border border-destructive/30 bg-destructive/5 py-16 text-center">
+              <p className="text-sm text-destructive">{playbook.error}</p>
+              <Button size="sm" variant="outline" onClick={reloadPlaybook}>
+                Retry
+              </Button>
+            </div>
+          ) : (
+            <>
+              <SystemPromptCard value={playbook.systemPrompt} />
+              <PlaybookEditor playbook={playbook} />
+              <ContextPreview playbook={playbook} />
+            </>
+          )}
         </div>
       </div>
     </div>

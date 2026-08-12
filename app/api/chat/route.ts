@@ -84,10 +84,13 @@ export async function POST(request: Request): Promise<Response> {
 
     const connection = await resolveConnection(principal.tenantId, payload.connectionId);
 
-    // The legacy client assembles the playbook itself and sends it along. Honor
-    // what it sent; fall back to the server-side playbook when it sent nothing.
-    const playbookContext =
-      payload.playbookContext?.trim() || (await buildAgentContext(principal.tenantId));
+    // The playbook shapes the system prompt with "this overrides your general
+    // assumptions" framing, so it has to come from the server's own record —
+    // trusting whatever the client sent here would let a tampered request body
+    // inject arbitrary standing instructions into every answer. `playbookContext`
+    // stays in the request type for shape compatibility with older clients but
+    // is no longer read.
+    const playbookContext = await buildAgentContext(principal.tenantId);
 
     let schema = null;
     if (connection) {

@@ -2,8 +2,6 @@
 
 import { useSyncExternalStore } from "react";
 
-const STORAGE_KEY = "database-agent:playbook";
-
 export type PlaybookSkill = {
   id: string;
   name: string;
@@ -16,166 +14,156 @@ export type PlaybookSkill = {
 export type PlaybookState = {
   systemPrompt: string;
   skills: PlaybookSkill[];
+  loading: boolean;
+  error: string | null;
 };
 
-const DEFAULT_SYSTEM_PROMPT = `You are a database analyst for this workspace.
-
-Answer with the smallest thing that fully answers the question. Show the SQL you
-ran. When a result is easier to read as a chart, render one. Say plainly when
-the data cannot answer what was asked — do not guess.`;
-
-const SEED_SKILLS: Omit<PlaybookSkill, "id" | "updatedAt">[] = [
-  {
-    name: "Revenue definitions",
-    description: "How revenue, MRR and churn are calculated here",
-    enabled: true,
-    content: `Revenue means recognized revenue, not bookings.
-
-- MRR: sum of active subscription amounts, normalized to a month.
-- Churn: subscriptions that moved to "cancelled" during the period, over
-  subscriptions active at the start of it.
-- Exclude internal accounts (customers.is_internal = true) from every revenue
-  figure unless explicitly asked to include them.`,
-  },
-  {
-    name: "SQL style guide",
-    description: "Conventions every generated query should follow",
-    enabled: true,
-    content: `- Uppercase keywords, snake_case identifiers.
-- Always qualify columns when more than one table is in play.
-- Prefer CTEs over nested subqueries.
-- Add an explicit LIMIT when the question does not imply a full scan.
-- Never SELECT *; name the columns.`,
-  },
-  {
-    name: "Schema notes",
-    description: "Gotchas in the warehouse the schema does not convey",
-    enabled: false,
-    content: `- orders.amount is in cents, not dollars.
-- customers.region uses ISO codes, but legacy rows before 2024 use free text.
-- The events table is partitioned by day; always filter on event_date first.
-- users.deleted_at is a soft delete — filter it out unless asked.`,
-  },
-];
-
-function seed(): PlaybookState {
-  return {
-    systemPrompt: DEFAULT_SYSTEM_PROMPT,
-    skills: SEED_SKILLS.map((skill) => ({
-      ...skill,
-      id: crypto.randomUUID(),
-      updatedAt: Date.now(),
-    })),
-  };
-}
-
-const SERVER_STATE: PlaybookState = {
-  systemPrompt: DEFAULT_SYSTEM_PROMPT,
+const EMPTY_STATE: PlaybookState = {
+  systemPrompt: "",
   skills: [],
+  loading: true,
+  error: null,
 };
 
-let state: PlaybookState | null = null;
+let state: PlaybookState = EMPTY_STATE;
+let started = false;
 const listeners = new Set<() => void>();
 
-function load(): PlaybookState {
-  try {
-    const raw = localStorage.getItem(STORAGE_KEY);
-    if (raw) {
-      const parsed = JSON.parse(raw) as PlaybookState;
-      if (typeof parsed.systemPrompt === "string" && Array.isArray(parsed.skills)) {
-        return parsed;
-      }
-    }
-  } catch {
-    // Storage unavailable — fall through to the seeded playbook.
-  }
-  return seed();
+function notify() {
+  listeners.forEach((listener) => listener());
+}
+
+function setState(patch: Partial<PlaybookState>) {
+  state = { ...state, ...patch };
+  notify();
 }
 
 function getSnapshot(): PlaybookState {
-  state ??= load();
   return state;
 }
 
 function getServerSnapshot(): PlaybookState {
-  return SERVER_STATE;
+  return EMPTY_STATE;
 }
 
 function subscribe(listener: () => void) {
   listeners.add(listener);
+  if (!started) {
+    started = true;
+    void load();
+  }
   return () => listeners.delete(listener);
 }
 
-function update(updater: (prev: PlaybookState) => PlaybookState) {
-  state = updater(getSnapshot());
+type SkillDoc = {
+  id: string;
+  name: string;
+  description: string;
+  content: string;
+  enabled: boolean;
+  updated_at: string;
+};
+
+function fromSkillDoc(doc: SkillDoc): PlaybookSkill {
+  return {
+    id: doc.id,
+    name: doc.name,
+    description: doc.description,
+    content: doc.content,
+    enabled: doc.enabled,
+    updatedAt: new Date(doc.updated_at).getTime(),
+  };
+}
+
+async function readJsonOrThrow(res: Response, message: string) {
+  if (!res.ok) throw new Error(message);
+  return res.json();
+}
+
+async function load(): Promise<void> {
   try {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
-  } catch {
-    // Persistence is best-effort.
+    const [playbookRes, skillsRes] = await Promise.all([
+      fetch("/api/v1/playbook"),
+      fetch("/api/v1/playbook/skills?limit=100"),
+    ]);
+    const playbook = await readJsonOrThrow(playbookRes, "Failed to load system instructions.");
+    const skillsBody = await readJsonOrThrow(skillsRes, "Failed to load skills.");
+    setState({
+      systemPrompt: playbook.system_prompt,
+      skills: (skillsBody.data as SkillDoc[]).map(fromSkillDoc),
+      loading: false,
+      error: null,
+    });
+  } catch (error) {
+    setState({
+      loading: false,
+      error: error instanceof Error ? error.message : "Failed to load the playbook.",
+    });
   }
-  listeners.forEach((listener) => listener());
 }
 
-export function setSystemPrompt(systemPrompt: string) {
-  update((prev) => ({ ...prev, systemPrompt }));
+/** Re-fetches after a failed load, e.g. from a "Retry" button. */
+export function reloadPlaybook(): void {
+  setState({ loading: true, error: null });
+  void load();
 }
 
-export function createSkill(): string {
-  const id = crypto.randomUUID();
-  update((prev) => ({
-    ...prev,
-    skills: [
-      {
-        id,
-        name: "Untitled skill",
-        description: "",
-        content: "",
-        enabled: true,
-        updatedAt: Date.now(),
-      },
-      ...prev.skills,
-    ],
-  }));
-  return id;
+export async function setSystemPrompt(systemPrompt: string): Promise<void> {
+  const res = await fetch("/api/v1/playbook", {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ system_prompt: systemPrompt }),
+  });
+  const doc = await readJsonOrThrow(res, "Failed to save system instructions.");
+  setState({ systemPrompt: doc.system_prompt });
 }
 
-export function updateSkill(id: string, patch: Partial<PlaybookSkill>) {
-  update((prev) => ({
-    ...prev,
-    skills: prev.skills.map((skill) =>
-      skill.id === id ? { ...skill, ...patch, updatedAt: Date.now() } : skill
-    ),
-  }));
+export async function createSkill(): Promise<string> {
+  const res = await fetch("/api/v1/playbook/skills", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      "Idempotency-Key": crypto.randomUUID(),
+    },
+    body: JSON.stringify({ name: "Untitled skill", description: "", content: "", enabled: true }),
+  });
+  const doc = await readJsonOrThrow(res, "Failed to create the skill.");
+  const skill = fromSkillDoc(doc);
+  setState({ skills: [skill, ...state.skills] });
+  return skill.id;
 }
 
-export function deleteSkill(id: string) {
-  update((prev) => ({
-    ...prev,
-    skills: prev.skills.filter((skill) => skill.id !== id),
-  }));
+export async function updateSkill(
+  id: string,
+  patch: Partial<Pick<PlaybookSkill, "name" | "description" | "content" | "enabled">>
+): Promise<void> {
+  const res = await fetch(`/api/v1/playbook/skills/${id}`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(patch),
+  });
+  const doc = await readJsonOrThrow(res, "Failed to save the skill.");
+  const skill = fromSkillDoc(doc);
+  setState({ skills: state.skills.map((s) => (s.id === id ? skill : s)) });
 }
 
-export function resetPlaybook() {
-  update(() => seed());
+export async function deleteSkill(id: string): Promise<void> {
+  const res = await fetch(`/api/v1/playbook/skills/${id}`, { method: "DELETE" });
+  if (!res.ok && res.status !== 404) throw new Error("Failed to delete the skill.");
+  setState({ skills: state.skills.filter((s) => s.id !== id) });
 }
 
 /**
  * Assembles everything the agent reads before answering: the always-on system
- * prompt followed by each enabled skill. This is exactly what gets sent with a
- * question, and exactly what the Playbook's context preview renders.
+ * prompt followed by each enabled skill. This is a client-side preview only —
+ * `lib/services/playbook.ts`'s `buildAgentContext` is what the agent actually
+ * uses, and the two must stay in lockstep or the preview lies about what the
+ * agent sees.
  */
 export function buildAgentContext(playbook: PlaybookState = getSnapshot()): string {
   const enabled = playbook.skills.filter((skill) => skill.enabled);
-  const sections = enabled.map(
-    (skill) => `## ${skill.name}\n${skill.content.trim()}`
-  );
+  const sections = enabled.map((skill) => `## ${skill.name}\n${skill.content.trim()}`);
   return [playbook.systemPrompt.trim(), ...sections].filter(Boolean).join("\n\n");
-}
-
-export function enabledSkillNames(
-  playbook: PlaybookState = getSnapshot()
-): string[] {
-  return playbook.skills.filter((s) => s.enabled).map((s) => s.name);
 }
 
 export function usePlaybook(): PlaybookState {
