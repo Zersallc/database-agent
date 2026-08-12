@@ -1,20 +1,24 @@
 /**
  * Tenants and bootstrapping.
  *
- * Every resource in this API hangs off a tenant, which means a brand-new
- * deployment has a chicken-and-egg problem: you need a tenant to make a request
- * and a request to make a tenant. This resolves it by seeding one local
- * workspace on first use — an admin user, a playbook, and the sample
- * connection — so a fresh checkout is immediately usable.
+ * Every resource in this API hangs off a tenant. A signed-in browser resolves
+ * to the user's real company (Prisma `Company.id`) — one workspace per
+ * company, the same way LMS scopes its data — so connections, the playbook,
+ * and conversations are shared within a company and never leak across one.
  *
- * Seeding is idempotent and only ever touches the local workspace. Real tenants
- * are created by the provisioning path, not here.
+ * A tenant has a chicken-and-egg problem: you need a tenant to make a request
+ * and a request to make a tenant. This resolves it by seeding a workspace on
+ * first use — an admin user, a playbook, and the sample connection — so a
+ * brand-new company (or a fresh local checkout, via `LOCAL_TENANT_ID`) is
+ * immediately usable. Seeding is idempotent per tenant.
  */
 
 import { ROLE_SCOPES, type Principal, type Role } from "@/lib/api/auth";
 import { newId } from "@/lib/api/ids";
+import { prisma } from "@/lib/db";
 import { stores } from "@/lib/providers";
 
+/** Used only when a signed-in user has no company yet, and for open-access dev. */
 export const LOCAL_TENANT_ID = "ten_local";
 
 export const DEFAULT_SYSTEM_PROMPT = `You are a database analyst for this workspace.
@@ -65,36 +69,36 @@ export type TenantDoc = {
   created_at: string;
 };
 
-/** Seeds the local workspace once. Concurrent callers converge on the same state. */
-export async function ensureLocalTenant(): Promise<TenantDoc> {
+/** Seeds a workspace once. Concurrent callers converge on the same state. */
+export async function ensureTenant(tenantId: string, name: string): Promise<TenantDoc> {
   const { documents } = stores();
-  const existing = await documents.get<TenantDoc>("tenants", LOCAL_TENANT_ID, LOCAL_TENANT_ID);
+  const existing = await documents.get<TenantDoc>("tenants", tenantId, tenantId);
   if (existing?.seeded) return existing;
 
   const now = new Date().toISOString();
   const tenant: TenantDoc = {
-    id: LOCAL_TENANT_ID,
+    id: tenantId,
     object: "tenant",
-    name: process.env.WORKSPACE_NAME ?? "Local workspace",
+    name,
     seeded: true,
     created_at: now,
   };
 
-  await documents.put("tenants", LOCAL_TENANT_ID, tenant);
+  await documents.put("tenants", tenantId, tenant);
 
-  await documents.put("users", LOCAL_TENANT_ID, {
+  await documents.put("users", tenantId, {
     id: localUserId(),
     object: "user",
     name: process.env.BOOTSTRAP_USER_NAME ?? "Local admin",
     email: process.env.BOOTSTRAP_USER_EMAIL ?? "admin@localhost",
-    company: process.env.WORKSPACE_NAME ?? "Company",
+    company: name,
     title: "Admin",
     role: "admin",
     status: "active",
     created_at: now,
   });
 
-  await documents.put("playbooks", LOCAL_TENANT_ID, {
+  await documents.put("playbooks", tenantId, {
     id: "playbook",
     object: "playbook",
     system_prompt: DEFAULT_SYSTEM_PROMPT,
@@ -103,7 +107,7 @@ export async function ensureLocalTenant(): Promise<TenantDoc> {
 
   for (const skill of SEED_SKILLS) {
     const id = newId("skill");
-    await documents.put("skills", LOCAL_TENANT_ID, {
+    await documents.put("skills", tenantId, {
       id,
       object: "skill",
       ...skill,
@@ -114,7 +118,7 @@ export async function ensureLocalTenant(): Promise<TenantDoc> {
 
   // The sample connection means a fresh workspace can answer a question before
   // anyone has credentials for a real database.
-  await documents.put("connections", LOCAL_TENANT_ID, {
+  await documents.put("connections", tenantId, {
     id: newId("connection"),
     object: "connection",
     name: "Sample dataset",
@@ -131,6 +135,11 @@ export async function ensureLocalTenant(): Promise<TenantDoc> {
   });
 
   return tenant;
+}
+
+/** The local/dev workspace — open access (no session) and users with no company. */
+export async function ensureLocalTenant(): Promise<TenantDoc> {
+  return ensureTenant(LOCAL_TENANT_ID, process.env.WORKSPACE_NAME ?? "Local workspace");
 }
 
 function localUserId(): string {
@@ -158,16 +167,27 @@ export async function defaultPrincipal(): Promise<Principal> {
  * The principal used for a request carrying a valid NextAuth session (a
  * browser with a logged-in cookie) instead of an API key.
  *
- * There is one tenant right now, so every signed-in user resolves into the
- * same local workspace — that's a deliberate simplification for a
- * single-company deployment, not a general multi-tenant mapping. Revisit
- * this the day a second real tenant shows up.
+ * The tenant is the user's real company — every user in the same company
+ * shares one workspace (connections, playbook, conversations), and a
+ * different company never sees it. A user with no company yet (not fully
+ * provisioned) falls back to the local/dev workspace rather than failing.
  */
-export async function sessionPrincipal(userId: string, dbRole: string): Promise<Principal> {
-  await ensureLocalTenant();
+export async function sessionPrincipal(
+  userId: string,
+  dbRole: string,
+  companyId: string | null
+): Promise<Principal> {
+  const tenantId = companyId ?? LOCAL_TENANT_ID;
+  if (companyId) {
+    const company = await prisma.company.findUnique({ where: { id: companyId } });
+    await ensureTenant(tenantId, company?.name ?? "Workspace");
+  } else {
+    await ensureLocalTenant();
+  }
+
   const role: Role = dbRole === "Admin" ? "admin" : "member";
   return {
-    tenantId: LOCAL_TENANT_ID,
+    tenantId,
     userId,
     role,
     scopes: ROLE_SCOPES[role],

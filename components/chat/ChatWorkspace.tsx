@@ -12,18 +12,12 @@ import {
   waitForMessages,
   type StoreConversation,
 } from "@/lib/chat-store";
+import { useProfile } from "@/lib/profile";
 import { useSettings } from "@/lib/settings-store";
 import type { Attachment } from "@/lib/workspace";
 import { ChatComposer } from "./ChatComposer";
 import { MessageBubble } from "./MessageBubble";
 import { AgentStatusBlock, type AgentStep } from "./blocks/AgentStatusBlock";
-
-const SUGGESTIONS = [
-  "Which regions grew fastest last quarter?",
-  "Show me daily signups for the last 7 days",
-  "What tables are available in this database?",
-  "Find customers with no orders in 90 days",
-];
 
 /** One line per `event:`/`data:` block in a text/event-stream body. */
 async function* parseSse(body: ReadableStream<Uint8Array>): AsyncGenerator<{ event: string; data: string }> {
@@ -61,6 +55,7 @@ export function ChatWorkspace() {
     error: workspaceError,
   } = useWorkspace();
   const settings = useSettings();
+  const profile = useProfile();
   const [input, setInput] = useState("");
   const [attachments, setAttachments] = useState<Attachment[]>([]);
   const [running, setRunning] = useState(false);
@@ -202,21 +197,11 @@ export function ChatWorkspace() {
                 <h1 className="text-2xl font-semibold">
                   Ask anything about your data
                 </h1>
-                <p className="mt-1 text-sm text-muted-foreground">
-                  Connected to {activeConnection.name} ({activeConnection.engine})
-                </p>
-              </div>
-              <div className="grid w-full gap-2 sm:grid-cols-2">
-                {SUGGESTIONS.map((suggestion) => (
-                  <button
-                    key={suggestion}
-                    type="button"
-                    onClick={() => void send(suggestion)}
-                    className="rounded-lg border border-border bg-card px-3 py-2.5 text-left text-sm transition-colors hover:bg-accent hover:text-accent-foreground"
-                  >
-                    {suggestion}
-                  </button>
-                ))}
+                {profile?.company_name && (
+                  <p className="mt-1 text-sm text-muted-foreground">
+                    Connected to {profile.company_name}
+                  </p>
+                )}
               </div>
             </div>
           ) : (

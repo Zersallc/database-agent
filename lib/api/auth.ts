@@ -131,7 +131,7 @@ export async function authenticate(request: Request): Promise<Principal> {
     const session = await auth();
     if (session?.user?.id) {
       const { sessionPrincipal } = await import("@/lib/services/tenancy");
-      return sessionPrincipal(session.user.id, session.user.role);
+      return sessionPrincipal(session.user.id, session.user.role, session.user.companyId);
     }
 
     if (openAccessEnabled()) {
