@@ -3,7 +3,7 @@
 import { useState } from "react";
 import type { FormEvent } from "react";
 import { useRouter } from "next/navigation";
-import { getSession, signIn as nextAuthSignIn } from "next-auth/react";
+import { signIn as nextAuthSignIn } from "next-auth/react";
 import { DatabaseIcon } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
@@ -15,17 +15,9 @@ import {
 } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import {
-  signIn as setDisplayUser,
-  signInAsNewUser,
-  updateUser,
-  useUsers,
-} from "@/lib/users-store";
-import { DEFAULT_COMPANY, type Role } from "@/lib/workspace";
 
 export function LoginPage() {
   const router = useRouter();
-  const { users } = useUsers();
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [error, setError] = useState<string | null>(null);
@@ -46,30 +38,6 @@ export function LoginPage() {
       setLoading(false);
       setError("Invalid email or password.");
       return;
-    }
-
-    // Real auth is the actual gate (checked server-side on every request).
-    // This just mirrors the signed-in identity into the display-only store
-    // the workspace chrome (sidebar, avatar, "Company — Title" line, and the
-    // admin-only nav items) reads from, so it isn't a blank/hung screen — and
-    // isn't stuck showing the wrong role — after a real login.
-    const session = await getSession();
-    const role: Role = session?.user?.role === "Admin" ? "admin" : "member";
-
-    const existing = users.find(
-      (u) => u.email.toLowerCase() === email.trim().toLowerCase()
-    );
-    if (existing) {
-      setDisplayUser(existing.id);
-      if (existing.role !== role) updateUser(existing.id, { role });
-    } else {
-      signInAsNewUser({
-        name: email.split("@")[0],
-        email,
-        company: DEFAULT_COMPANY,
-        title: "Member",
-        role,
-      });
     }
 
     router.replace("/");

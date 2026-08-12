@@ -1,7 +1,8 @@
 "use client";
 
 import Link from "next/link";
-import { usePathname, useRouter } from "next/navigation";
+import { usePathname } from "next/navigation";
+import { signOut, useSession } from "next-auth/react";
 import {
   BookOpenIcon,
   Building2Icon,
@@ -31,9 +32,8 @@ import {
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import { Button } from "@/components/ui/button";
 import { ThemeToggle } from "@/components/theme/ThemeToggle";
-import { signOut, useCurrentUser } from "@/lib/users-store";
-import { canManageUsers, userSubtitle } from "@/lib/workspace";
 import { useWorkspace } from "@/lib/chat-store";
+import { useProfile } from "@/lib/profile";
 import { ConnectionSwitcher } from "./ConnectionSwitcher";
 
 const NAV = [
@@ -46,8 +46,8 @@ const NAV = [
 
 export function WorkspaceSidebar() {
   const pathname = usePathname();
-  const router = useRouter();
-  const user = useCurrentUser();
+  const { data: session } = useSession();
+  const profile = useProfile();
   const {
     conversations,
     activeConversationId,
@@ -56,10 +56,14 @@ export function WorkspaceSidebar() {
     deleteConversation,
   } = useWorkspace();
 
+  const isAdmin = session?.user?.role === "Admin";
   const onChat = pathname === "/";
-  const nav = NAV.filter(
-    (item) => !item.adminOnly || (user && canManageUsers(user))
-  );
+  const nav = NAV.filter((item) => !item.adminOnly || isAdmin);
+
+  const displayName = profile?.name || session?.user?.email || "";
+  const subtitle = [profile?.company_name, isAdmin ? "Admin" : "Member"]
+    .filter(Boolean)
+    .join(" — ");
 
   return (
     <Sidebar collapsible="icon">
@@ -127,18 +131,16 @@ export function WorkspaceSidebar() {
 
       <SidebarFooter>
         <SidebarSeparator />
-        {user && (
+        {session?.user && (
           <div className="flex items-center gap-2 p-1 group-data-[collapsible=icon]:hidden">
             <Avatar className="size-7">
               <AvatarFallback className="bg-sidebar-accent text-xs text-sidebar-accent-foreground">
-                {user.name.slice(0, 2).toUpperCase()}
+                {(displayName || "?").slice(0, 2).toUpperCase()}
               </AvatarFallback>
             </Avatar>
             <div className="grid min-w-0 flex-1 leading-tight">
-              <span className="truncate text-sm font-medium">{user.name}</span>
-              <span className="truncate text-xs opacity-70">
-                {userSubtitle(user)}
-              </span>
+              <span className="truncate text-sm font-medium">{displayName}</span>
+              <span className="truncate text-xs opacity-70">{subtitle}</span>
             </div>
             <ThemeToggle />
             <Button
@@ -146,10 +148,7 @@ export function WorkspaceSidebar() {
               size="icon-sm"
               aria-label="Sign out"
               className="text-sidebar-foreground hover:bg-sidebar-accent hover:text-sidebar-accent-foreground"
-              onClick={() => {
-                signOut();
-                router.replace("/login");
-              }}
+              onClick={() => void signOut({ callbackUrl: "/login" })}
             >
               <LogOutIcon />
             </Button>
