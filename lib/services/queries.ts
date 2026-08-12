@@ -14,6 +14,13 @@ import { translateConnectorError, withConnector, type QueryResult } from "@/lib/
 import { stores } from "@/lib/providers";
 import { connectorOptions, type ConnectionDoc } from "./connections";
 
+/**
+ * Applied whenever a caller doesn't specify one — which today is every
+ * caller. Without it, a model-written query with a missing WHERE clause or
+ * an unindexed join runs unbounded against the connected database.
+ */
+const DEFAULT_QUERY_TIMEOUT_MS = Number(process.env.QUERY_TIMEOUT_MS ?? 30000);
+
 export type QueryDoc = {
   id: string;
   object: "query";
@@ -89,7 +96,10 @@ export async function runQuery(
 
   try {
     result = await withConnector(connection.engine, options, (connector) =>
-      connector.execute(input.sql, { maxRows, timeoutMs: input.timeoutMs })
+      connector.execute(input.sql, {
+        maxRows,
+        timeoutMs: input.timeoutMs ?? DEFAULT_QUERY_TIMEOUT_MS,
+      })
     );
   } catch (error) {
     const translated = translateConnectorError(error);

@@ -1,27 +1,23 @@
 "use client";
 
-import { CheckIcon, CircleIcon, LoaderIcon } from "lucide-react";
+import { CheckIcon, CircleIcon, LoaderIcon, XIcon } from "lucide-react";
 import { cn } from "@/lib/utils";
 
-export type AgentStepStatus = "pending" | "active" | "done";
+export type AgentStepStatus = "pending" | "active" | "done" | "failed";
 
 export type AgentStep = {
   label: string;
   status: AgentStepStatus;
+  detail?: string | null;
+  query_id?: string | null;
 };
-
-/** The canned progress the mock backend "runs through" on every question. */
-export const DEFAULT_AGENT_STEPS: string[] = [
-  "Connecting to database",
-  "Finding relevant tables",
-  "Generating SQL",
-  "Running query",
-  "Creating visualization",
-];
 
 function StepIcon({ status }: { status: AgentStepStatus }) {
   if (status === "done") {
     return <CheckIcon className="size-3.5 text-primary" />;
+  }
+  if (status === "failed") {
+    return <XIcon className="size-3.5 text-destructive" />;
   }
   if (status === "active") {
     return <LoaderIcon className="size-3.5 animate-spin text-primary" />;
@@ -42,14 +38,16 @@ export function AgentStatusBlock({
         {title}
       </p>
       <ul className="space-y-1.5">
-        {steps.map((step) => (
+        {steps.map((step, index) => (
           <li
-            key={step.label}
+            // Labels repeat (e.g. multiple "Ran query" steps in one run), so
+            // position is the only stable key for this append-only list.
+            key={index}
             className={cn(
               "flex items-center gap-2 text-sm transition-colors",
               step.status === "pending" && "text-muted-foreground",
-              step.status === "active" && "text-foreground",
-              step.status === "done" && "text-foreground"
+              (step.status === "active" || step.status === "done") && "text-foreground",
+              step.status === "failed" && "text-destructive"
             )}
           >
             <StepIcon status={step.status} />

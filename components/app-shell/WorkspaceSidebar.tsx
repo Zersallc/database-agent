@@ -33,7 +33,7 @@ import { Button } from "@/components/ui/button";
 import { ThemeToggle } from "@/components/theme/ThemeToggle";
 import { signOut, useCurrentUser } from "@/lib/users-store";
 import { canManageUsers, userSubtitle } from "@/lib/workspace";
-import { useWorkspace } from "@/lib/workspace-store";
+import { useWorkspace } from "@/lib/chat-store";
 import { ConnectionSwitcher } from "./ConnectionSwitcher";
 
 const NAV = [
@@ -94,7 +94,7 @@ export function WorkspaceSidebar() {
             <SidebarGroupContent>
               <SidebarMenu>
                 <SidebarMenuItem>
-                  <SidebarMenuButton onClick={newConversation} tooltip="New chat">
+                  <SidebarMenuButton onClick={() => void newConversation()} tooltip="New chat">
                     <PlusIcon />
                     <span>New chat</span>
                   </SidebarMenuButton>
@@ -113,7 +113,7 @@ export function WorkspaceSidebar() {
                     <SidebarMenuAction
                       showOnHover
                       aria-label={`Delete ${conversation.title}`}
-                      onClick={() => deleteConversation(conversation.id)}
+                      onClick={() => void deleteConversation(conversation.id)}
                     >
                       <XIcon />
                     </SidebarMenuAction>

@@ -4,16 +4,19 @@ import { useEffect, useRef, useState } from "react";
 import { AnimatePresence } from "framer-motion";
 import { Badge } from "@/components/ui/badge";
 import { PageHeader } from "@/components/app-shell/PageHeader";
+import {
+  appendLocalMessage,
+  touchConversation,
+  updateLocalMessage,
+  useWorkspace,
+  waitForMessages,
+  type StoreConversation,
+} from "@/lib/chat-store";
 import { useSettings } from "@/lib/settings-store";
-import { useWorkspace } from "@/lib/workspace-store";
-import type { Attachment, Message } from "@/lib/workspace";
+import type { Attachment } from "@/lib/workspace";
 import { ChatComposer } from "./ChatComposer";
 import { MessageBubble } from "./MessageBubble";
-import {
-  AgentStatusBlock,
-  DEFAULT_AGENT_STEPS,
-  type AgentStep,
-} from "./blocks/AgentStatusBlock";
+import { AgentStatusBlock, type AgentStep } from "./blocks/AgentStatusBlock";
 
 const SUGGESTIONS = [
   "Which regions grew fastest last quarter?",
@@ -22,77 +25,160 @@ const SUGGESTIONS = [
   "Find customers with no orders in 90 days",
 ];
 
-/** Turns an index into the step list the AgentStatusBlock renders. */
-function stepsAt(index: number): AgentStep[] {
-  return DEFAULT_AGENT_STEPS.map((label, i) => ({
-    label,
-    status: i < index ? "done" : i === index ? "active" : "pending",
-  }));
+/** One line per `event:`/`data:` block in a text/event-stream body. */
+async function* parseSse(body: ReadableStream<Uint8Array>): AsyncGenerator<{ event: string; data: string }> {
+  const reader = body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+
+  while (true) {
+    const { value, done } = await reader.read();
+    if (done) break;
+    buffer += decoder.decode(value, { stream: true });
+
+    let boundary: number;
+    while ((boundary = buffer.indexOf("\n\n")) !== -1) {
+      const chunk = buffer.slice(0, boundary);
+      buffer = buffer.slice(boundary + 2);
+
+      let event = "message";
+      const dataLines: string[] = [];
+      for (const line of chunk.split("\n")) {
+        if (line.startsWith("event:")) event = line.slice(6).trim();
+        else if (line.startsWith("data:")) dataLines.push(line.slice(5).trim());
+      }
+      if (dataLines.length > 0) yield { event, data: dataLines.join("\n") };
+    }
+  }
 }
 
 export function ChatWorkspace() {
-  const { activeConversation, activeConnection, appendMessage } = useWorkspace();
+  const {
+    activeConversation,
+    activeConnection,
+    connections,
+    loading: workspaceLoading,
+    error: workspaceError,
+  } = useWorkspace();
   const settings = useSettings();
   const [input, setInput] = useState("");
   const [attachments, setAttachments] = useState<Attachment[]>([]);
-  const [loading, setLoading] = useState(false);
-  const [stepIndex, setStepIndex] = useState(0);
+  const [running, setRunning] = useState(false);
+  const [liveSteps, setLiveSteps] = useState<AgentStep[]>([]);
   const bottomRef = useRef<HTMLDivElement>(null);
 
   const messages = activeConversation.messages;
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, [messages.length, loading, stepIndex]);
+  }, [messages.length, running, liveSteps.length]);
 
-  // Canned progress ticker. Replace with real agent events once the backend
-  // streams them.
-  useEffect(() => {
-    if (!loading) return;
-    const timer = setInterval(() => {
-      setStepIndex((i) => Math.min(i + 1, DEFAULT_AGENT_STEPS.length - 1));
-    }, 450);
-    return () => clearInterval(timer);
-  }, [loading]);
-
-  async function send(text: string, files: Attachment[] = []) {
+  async function send(text: string) {
     const trimmed = text.trim();
-    if ((!trimmed && files.length === 0) || loading) return;
+    if (!trimmed || running || !activeConversation.id) return;
 
-    const userMessage: Message = {
-      role: "user",
-      content: trimmed,
-      ...(files.length > 0 ? { attachments: files } : {}),
-    };
-    const history = [...messages, userMessage];
-    appendMessage(userMessage);
+    const conversationId = activeConversation.id;
+    const userMessageId = crypto.randomUUID();
+    const assistantMessageId = crypto.randomUUID();
+
     setInput("");
     setAttachments([]);
-    setStepIndex(0);
-    setLoading(true);
+    setLiveSteps([]);
+    setRunning(true);
 
     try {
-      const res = await fetch("/api/chat", {
+      // Otherwise a message sent the instant a conversation is opened can
+      // append before that conversation's history finishes loading, and the
+      // history fetch then overwrites it when it lands.
+      await waitForMessages(conversationId);
+
+      appendLocalMessage(conversationId, { id: userMessageId, role: "user", content: trimmed });
+      appendLocalMessage(conversationId, {
+        id: assistantMessageId,
+        role: "assistant",
+        content: "",
+        streaming: true,
+      });
+
+      const res = await fetch(`/api/v1/conversations/${conversationId}/runs`, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: { "Content-Type": "application/json", "Idempotency-Key": crypto.randomUUID() },
         body: JSON.stringify({
-          messages: history,
-          connectionId: activeConnection.id,
-          // The playbook itself is read server-side, from the tenant's own
-          // record — not assembled and sent by the client.
-          responseDetail: settings.responseDetail,
+          content: trimmed,
+          connection_id: activeConnection.id || undefined,
+          response_detail: settings.responseDetail,
+          stream: true,
         }),
       });
-      const data = await res.json();
-      appendMessage({ role: "assistant", content: data.reply });
-    } catch {
-      appendMessage({
-        role: "assistant",
-        content: "Something went wrong. Please try again.",
+
+      if (!res.ok || !res.body) {
+        throw new Error(`The agent could not be reached (${res.status}).`);
+      }
+
+      let finalContent = "";
+      for await (const { event, data } of parseSse(res.body)) {
+        const payload = JSON.parse(data);
+        if (event === "run.step") {
+          setLiveSteps((prev) => [...prev, payload.step]);
+        } else if (event === "run.content_delta") {
+          finalContent += payload.delta;
+          updateLocalMessage(conversationId, assistantMessageId, { content: finalContent, streaming: true });
+        } else if (event === "run.completed") {
+          updateLocalMessage(conversationId, assistantMessageId, {
+            content: payload.run.content ?? finalContent,
+            streaming: false,
+          });
+        } else if (event === "run.failed") {
+          updateLocalMessage(conversationId, assistantMessageId, {
+            content: `**Something went wrong.**\n\n${payload.error?.message ?? payload.run?.error?.message ?? "The agent could not answer."}`,
+            streaming: false,
+          });
+        }
+      }
+
+      // The first question titles the conversation server-side — refresh the
+      // sidebar's copy so it stops saying "New chat".
+      const convRes = await fetch(`/api/v1/conversations/${conversationId}`);
+      if (convRes.ok) {
+        const doc = await convRes.json();
+        touchConversation({
+          id: doc.id,
+          title: doc.title,
+          connectionId: doc.connection_id,
+          updatedAt: doc.updated_at,
+        } satisfies StoreConversation);
+      }
+    } catch (error) {
+      updateLocalMessage(conversationId, assistantMessageId, {
+        content: `**Something went wrong.**\n\n${error instanceof Error ? error.message : "Please try again."}`,
+        streaming: false,
       });
     } finally {
-      setLoading(false);
+      setRunning(false);
+      setLiveSteps([]);
     }
+  }
+
+  if (workspaceLoading) {
+    return (
+      <div className="flex h-svh flex-col">
+        <PageHeader title="Chat" />
+        <div className="flex flex-1 items-center justify-center text-sm text-muted-foreground">
+          Loading workspace…
+        </div>
+      </div>
+    );
+  }
+
+  if (workspaceError || connections.length === 0) {
+    return (
+      <div className="flex h-svh flex-col">
+        <PageHeader title="Chat" />
+        <div className="flex flex-1 flex-col items-center justify-center gap-2 text-center text-sm text-muted-foreground">
+          <p>{workspaceError ?? "No database connection is set up for this workspace yet."}</p>
+        </div>
+      </div>
+    );
   }
 
   return (
@@ -108,7 +194,11 @@ export function ChatWorkspace() {
 
       <div className="flex-1 overflow-y-auto">
         <div className="mx-auto w-full max-w-3xl px-4 py-6">
-          {messages.length === 0 && !loading ? (
+          {!activeConversation.messagesLoaded ? (
+            <div className="py-16 text-center text-sm text-muted-foreground">
+              Loading conversation…
+            </div>
+          ) : messages.length === 0 && !running ? (
             <div className="flex flex-col items-center gap-6 py-16 text-center">
               <div>
                 <h1 className="text-2xl font-semibold">
@@ -123,7 +213,7 @@ export function ChatWorkspace() {
                   <button
                     key={suggestion}
                     type="button"
-                    onClick={() => send(suggestion)}
+                    onClick={() => void send(suggestion)}
                     className="rounded-lg border border-border bg-card px-3 py-2.5 text-left text-sm transition-colors hover:bg-accent hover:text-accent-foreground"
                   >
                     {suggestion}
@@ -134,12 +224,12 @@ export function ChatWorkspace() {
           ) : (
             <div className="flex flex-col gap-5">
               <AnimatePresence initial={false}>
-                {messages.map((message, i) => (
-                  <MessageBubble key={i} message={message} />
+                {messages.map((message) => (
+                  <MessageBubble key={message.id} message={message} />
                 ))}
               </AnimatePresence>
 
-              {loading && <AgentStatusBlock steps={stepsAt(stepIndex)} />}
+              {running && liveSteps.length > 0 && <AgentStatusBlock steps={liveSteps} />}
             </div>
           )}
           <div ref={bottomRef} />
@@ -153,8 +243,8 @@ export function ChatWorkspace() {
             onChange={setInput}
             attachments={attachments}
             onAttachmentsChange={setAttachments}
-            onSubmit={() => send(input, attachments)}
-            disabled={loading}
+            onSubmit={() => void send(input)}
+            disabled={running}
             placeholder={`Ask ${activeConnection.name} anything…`}
           />
         </div>

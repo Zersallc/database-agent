@@ -29,7 +29,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Switch } from "@/components/ui/switch";
-import { MOCK_CONNECTIONS } from "@/lib/workspace";
+import { useWorkspace } from "@/lib/chat-store";
 import {
   clearLocalData,
   updateSettings,
@@ -158,8 +158,9 @@ export function ChatSection({ settings }: { settings: Settings }) {
 }
 
 export function ConnectionsSection({ settings }: { settings: Settings }) {
+  const { connections } = useWorkspace();
   const items = Object.fromEntries(
-    MOCK_CONNECTIONS.map((c) => [c.id, `${c.name} · ${c.engine}`])
+    connections.map((c) => [c.id, `${c.name} · ${c.engine}`])
   );
 
   return (
@@ -174,7 +175,7 @@ export function ConnectionsSection({ settings }: { settings: Settings }) {
         <Row label="Default connection">
           <Select
             items={items}
-            value={settings.defaultConnectionId}
+            value={settings.defaultConnectionId || connections[0]?.id}
             onValueChange={(value) =>
               updateSettings({ defaultConnectionId: value as string })
             }
@@ -183,7 +184,7 @@ export function ConnectionsSection({ settings }: { settings: Settings }) {
               <SelectValue />
             </SelectTrigger>
             <SelectContent>
-              {MOCK_CONNECTIONS.map((connection) => (
+              {connections.map((connection) => (
                 <SelectItem key={connection.id} value={connection.id}>
                   {connection.name} · {connection.engine}
                 </SelectItem>

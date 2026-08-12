@@ -17,12 +17,13 @@ import {
 } from "@/components/ui/sidebar";
 import { cn } from "@/lib/utils";
 import type { ConnectionStatus } from "@/lib/workspace";
-import { useWorkspace } from "@/lib/workspace-store";
+import { useWorkspace } from "@/lib/chat-store";
 
 const STATUS_DOT: Record<ConnectionStatus, string> = {
   connected: "bg-emerald-400",
   degraded: "bg-amber-400",
   offline: "bg-zinc-500",
+  unknown: "bg-zinc-500",
 };
 
 function StatusDot({ status }: { status: ConnectionStatus }) {
@@ -71,7 +72,7 @@ export function ConnectionSwitcher() {
               {connections.map((connection) => (
                 <DropdownMenuItem
                   key={connection.id}
-                  onClick={() => setActiveConnectionId(connection.id)}
+                  onClick={() => void setActiveConnectionId(connection.id)}
                 >
                   <StatusDot status={connection.status} />
                   <span className="flex-1 truncate">{connection.name}</span>
