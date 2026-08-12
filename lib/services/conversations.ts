@@ -41,6 +41,9 @@ export type MessageDoc = {
   content: string;
   attachments: Attachment[];
   run_id: string | null;
+  /** Set on an assistant message — the run's token usage and wall-clock time, so they survive a reload. */
+  usage: { input_tokens: number; output_tokens: number } | null;
+  duration_ms: number | null;
   created_at: string;
 };
 
@@ -66,6 +69,8 @@ export function serializeMessage(doc: MessageDoc) {
     content: doc.content,
     attachments: doc.attachments,
     run_id: doc.run_id,
+    usage: doc.usage,
+    duration_ms: doc.duration_ms,
     created_at: doc.created_at,
   };
 }
@@ -189,6 +194,8 @@ export async function appendMessage(
     content: string;
     attachments?: Attachment[];
     runId?: string | null;
+    usage?: { input_tokens: number; output_tokens: number } | null;
+    durationMs?: number | null;
   }
 ): Promise<MessageDoc> {
   const now = new Date().toISOString();
@@ -200,6 +207,8 @@ export async function appendMessage(
     content: input.content,
     attachments: input.attachments ?? [],
     run_id: input.runId ?? null,
+    usage: input.usage ?? null,
+    duration_ms: input.durationMs ?? null,
     created_at: now,
   };
 

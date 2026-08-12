@@ -122,6 +122,8 @@ export function ChatWorkspace() {
           updateLocalMessage(conversationId, assistantMessageId, {
             content: payload.run.content ?? finalContent,
             streaming: false,
+            usage: payload.run.usage,
+            durationMs: payload.run.duration_ms,
           });
         } else if (event === "run.failed") {
           updateLocalMessage(conversationId, assistantMessageId, {

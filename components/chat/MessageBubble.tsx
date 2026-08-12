@@ -48,6 +48,21 @@ function AttachmentGrid({ attachments }: { attachments: Attachment[] }) {
   );
 }
 
+function UsageLine({ message }: { message: StoreMessage }) {
+  if (message.streaming || !message.usage) return null;
+  const { input_tokens, output_tokens } = message.usage;
+  const total = input_tokens + output_tokens;
+  const seconds = message.durationMs ? (message.durationMs / 1000).toFixed(1) : null;
+
+  return (
+    <p className="mt-1.5 text-xs text-muted-foreground">
+      {total.toLocaleString()} tokens ({input_tokens.toLocaleString()} in ·{" "}
+      {output_tokens.toLocaleString()} out)
+      {seconds && ` · ${seconds}s`}
+    </p>
+  );
+}
+
 export function MessageBubble({ message }: { message: StoreMessage }) {
   const isUser = message.role === "user";
   const attachments = message.attachments ?? [];
@@ -77,6 +92,7 @@ export function MessageBubble({ message }: { message: StoreMessage }) {
       ) : (
         <div className="min-w-0 flex-1 text-sm">
           <Markdown content={message.content} />
+          <UsageLine message={message} />
         </div>
       )}
     </motion.div>

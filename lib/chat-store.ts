@@ -33,6 +33,8 @@ export type StoreMessage = {
   attachments?: Attachment[];
   /** True while a `run.content_delta` stream is still filling this in. */
   streaming?: boolean;
+  usage?: { input_tokens: number; output_tokens: number } | null;
+  durationMs?: number | null;
 };
 
 type ChatState = {
@@ -119,8 +121,16 @@ function fromMessageDoc(doc: {
   id: string;
   role: "user" | "assistant";
   content: string;
+  usage?: { input_tokens: number; output_tokens: number } | null;
+  duration_ms?: number | null;
 }): StoreMessage {
-  return { id: doc.id, role: doc.role, content: doc.content };
+  return {
+    id: doc.id,
+    role: doc.role,
+    content: doc.content,
+    usage: doc.usage ?? null,
+    durationMs: doc.duration_ms ?? null,
+  };
 }
 
 async function bootstrap(): Promise<void> {
