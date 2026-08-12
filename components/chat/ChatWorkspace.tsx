@@ -160,9 +160,6 @@ export function ChatWorkspace() {
             disabled={loading}
             placeholder={`Ask ${activeConnection.name} anything…`}
           />
-          <p className="mt-2 text-center text-xs text-muted-foreground">
-            Responses are mocked — no database is connected yet.
-          </p>
         </div>
       </div>
     </div>
