@@ -59,6 +59,9 @@ export function serializeRun(doc: RunDoc) {
     steps: doc.steps,
     model: doc.model,
     usage: doc.usage,
+    duration_ms: doc.completed_at
+      ? new Date(doc.completed_at).getTime() - new Date(doc.created_at).getTime()
+      : null,
     error: doc.error,
     created_at: doc.created_at,
     completed_at: doc.completed_at,
@@ -207,10 +210,13 @@ export async function* executeRun(
       throw failure ?? new ApiError("upstream_model_error", "The agent produced no answer.");
     }
 
+    const completedAt = new Date().toISOString();
     const responseMessage = await appendMessage(tenantId, conversation, {
       role: "assistant",
       content: final.content,
       runId,
+      usage: final.usage,
+      durationMs: new Date(completedAt).getTime() - new Date(run.created_at).getTime(),
     });
 
     run = {
@@ -221,7 +227,7 @@ export async function* executeRun(
       steps: final.steps.length ? final.steps : steps,
       model: final.model,
       usage: final.usage,
-      completed_at: new Date().toISOString(),
+      completed_at: completedAt,
     };
     await documents.put("runs", tenantId, run);
     yield { type: "run.completed", run_id: runId, run: serializeRun(run) };
