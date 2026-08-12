@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 import { CheckIcon, PlusIcon, Trash2Icon } from "lucide-react";
+import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
@@ -21,6 +22,9 @@ function SkillForm({ skill }: { skill: PlaybookSkill }) {
   const [draft, setDraft] = useState(skill);
   const [lastSkill, setLastSkill] = useState(skill);
   const [saved, setSaved] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [deleting, setDeleting] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
   // Adjust state during render when the stored skill changes underneath us —
   // React's documented alternative to syncing props into state from an effect.
@@ -34,14 +38,33 @@ function SkillForm({ skill }: { skill: PlaybookSkill }) {
     draft.description !== skill.description ||
     draft.content !== skill.content;
 
-  function save() {
-    updateSkill(skill.id, {
-      name: draft.name.trim() || "Untitled skill",
-      description: draft.description.trim(),
-      content: draft.content,
-    });
-    setSaved(true);
-    setTimeout(() => setSaved(false), 1500);
+  async function save() {
+    setSaving(true);
+    setError(null);
+    try {
+      await updateSkill(skill.id, {
+        name: draft.name.trim() || "Untitled skill",
+        description: draft.description.trim(),
+        content: draft.content,
+      });
+      setSaved(true);
+      setTimeout(() => setSaved(false), 1500);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to save.");
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function remove() {
+    setDeleting(true);
+    setError(null);
+    try {
+      await deleteSkill(skill.id);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to delete.");
+      setDeleting(false);
+    }
   }
 
   return (
@@ -85,11 +108,11 @@ function SkillForm({ skill }: { skill: PlaybookSkill }) {
         </div>
 
         <div className="flex items-center gap-2">
-          <Button size="sm" onClick={save} disabled={!dirty}>
+          <Button size="sm" onClick={() => void save()} disabled={!dirty || saving}>
             {saved ? <CheckIcon /> : null}
-            {saved ? "Saved" : "Save"}
+            {saving ? "Saving…" : saved ? "Saved" : "Save"}
           </Button>
-          {dirty && (
+          {dirty && !saving && (
             <Button size="sm" variant="ghost" onClick={() => setDraft(skill)}>
               Discard
             </Button>
@@ -98,12 +121,14 @@ function SkillForm({ skill }: { skill: PlaybookSkill }) {
             size="sm"
             variant="destructive"
             className="ml-auto"
-            onClick={() => deleteSkill(skill.id)}
+            onClick={() => void remove()}
+            disabled={deleting}
           >
             <Trash2Icon />
-            Delete
+            {deleting ? "Deleting…" : "Delete"}
           </Button>
         </div>
+        {error && <p className="text-xs text-destructive">{error}</p>}
       </CardContent>
     </Card>
   );
@@ -126,7 +151,13 @@ export function PlaybookEditor({ playbook }: { playbook: PlaybookState }) {
             size="sm"
             variant="outline"
             className="w-full"
-            onClick={() => setSelectedId(createSkill())}
+            onClick={() => {
+              createSkill()
+                .then(setSelectedId)
+                .catch((err) =>
+                  toast.error(err instanceof Error ? err.message : "Failed to create the skill.")
+                );
+            }}
           >
             <PlusIcon />
             New skill
@@ -166,9 +197,11 @@ export function PlaybookEditor({ playbook }: { playbook: PlaybookState }) {
                   </button>
                   <Switch
                     checked={skill.enabled}
-                    onCheckedChange={(enabled) =>
-                      updateSkill(skill.id, { enabled })
-                    }
+                    onCheckedChange={(enabled) => {
+                      updateSkill(skill.id, { enabled }).catch((err) =>
+                        toast.error(err instanceof Error ? err.message : "Failed to save.")
+                      );
+                    }}
                     aria-label={`${skill.enabled ? "Disable" : "Enable"} ${skill.name}`}
                     className="mt-1"
                   />
