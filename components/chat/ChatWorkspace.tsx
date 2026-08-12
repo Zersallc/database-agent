@@ -186,9 +186,7 @@ export function ChatWorkspace() {
       <PageHeader
         title={activeConversation.title}
         actions={
-          <Badge variant="secondary">
-            {activeConnection.name} · {activeConnection.engine}
-          </Badge>
+          <Badge variant="secondary">Sys.Lab Database Ai Agent</Badge>
         }
       />
 
