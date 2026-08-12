@@ -2,7 +2,6 @@
 
 import { useSyncExternalStore } from "react";
 import { THEME_STORAGE_KEY } from "@/components/theme/ThemeScript";
-import { MOCK_CONNECTIONS } from "./workspace";
 
 const STORAGE_KEY = "database-agent:settings";
 
@@ -18,7 +17,9 @@ export type Settings = {
 
 const DEFAULTS: Settings = {
   theme: "system",
-  defaultConnectionId: MOCK_CONNECTIONS[0].id,
+  // Empty means "no preference" — the chat store falls back to whichever
+  // connection is active, then the workspace's first one.
+  defaultConnectionId: "",
   responseDetail: "balanced",
   autoRunSql: false,
 };

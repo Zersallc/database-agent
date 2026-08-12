@@ -5,7 +5,8 @@ import { motion } from "framer-motion";
 import { SparklesIcon } from "lucide-react";
 import { Dialog, DialogContent, DialogTitle } from "@/components/ui/dialog";
 import { Markdown } from "./Markdown";
-import type { Attachment, Message } from "@/lib/workspace";
+import type { StoreMessage } from "@/lib/chat-store";
+import type { Attachment } from "@/lib/workspace";
 
 function AttachmentGrid({ attachments }: { attachments: Attachment[] }) {
   const [open, setOpen] = useState<Attachment | null>(null);
@@ -47,7 +48,7 @@ function AttachmentGrid({ attachments }: { attachments: Attachment[] }) {
   );
 }
 
-export function MessageBubble({ message }: { message: Message }) {
+export function MessageBubble({ message }: { message: StoreMessage }) {
   const isUser = message.role === "user";
   const attachments = message.attachments ?? [];
 
