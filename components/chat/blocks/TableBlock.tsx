@@ -127,7 +127,12 @@ export function TableBlock({
       >
         <table
           className="w-full text-sm"
-          style={{ width: table.getCenterTotalSize() }}
+          // A minimum, not a fixed width. TanStack's column sizes total 150px
+          // per column, so a two-column result rendered at that width sits in a
+          // third of the card with dead space beside it. As a floor the columns
+          // stretch to fill a wide card and still scroll horizontally once
+          // there are more of them than fit.
+          style={{ minWidth: table.getCenterTotalSize() }}
         >
           <thead className="bg-muted/60">
             {table.getHeaderGroups().map((hg) => (
