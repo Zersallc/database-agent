@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import NextAuth from "next-auth";
 import Credentials from "next-auth/providers/credentials";
 import bcrypt from "bcryptjs";
@@ -7,6 +8,11 @@ import { prisma } from "@/lib/db";
 const loginSchema = z.object({
   email: z.email(),
   password: z.string().min(1),
+});
+
+const autoLinkSchema = z.object({
+  email: z.email(),
+  company: z.string().min(1),
 });
 
 // Static bcrypt hash of an unguessable value, compared against when no user is
@@ -39,6 +45,68 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
           name: user.name,
           role: user.role,
           companyId: user.companyId,
+        };
+      },
+    }),
+
+    /**
+     * A shareable link, not a password: knowing the email and the exact
+     * company name is enough to get in. There is deliberately no separate
+     * secret — the company name plays that role, the same way an invite link
+     * with the right query string does elsewhere in the SysLab suite.
+     *
+     * A recognized email joins that company (reassigning it if the account
+     * belonged to a different one — the link is the source of truth for
+     * where the recipient should land). An unrecognized email provisions a
+     * new, read-only Viewer account, so sharing the link is enough to give
+     * someone a look at the workspace without an admin creating them first.
+     */
+    Credentials({
+      id: "auto-link",
+      name: "Auto sign-in link",
+      credentials: { email: {}, company: {} },
+      async authorize(credentials) {
+        const parsed = autoLinkSchema.safeParse(credentials);
+        if (!parsed.success) return null;
+        const email = parsed.data.email.trim().toLowerCase();
+        const companyName = parsed.data.company.trim();
+
+        const company = await prisma.company.findFirst({
+          where: { name: { equals: companyName, mode: "insensitive" }, isActive: true },
+        });
+        if (!company) return null;
+
+        const existing = await prisma.user.findUnique({ where: { email } });
+        if (existing) {
+          if (!existing.isActive) return null;
+          const user =
+            existing.companyId === company.id
+              ? existing
+              : await prisma.user.update({
+                  where: { id: existing.id },
+                  data: { companyId: company.id },
+                });
+          return { id: user.id, email: user.email, name: user.name, role: user.role, companyId: user.companyId };
+        }
+
+        // The password is random and never handed out — this account is only
+        // ever reached through a link carrying its email, never a password.
+        const created = await prisma.user.create({
+          data: {
+            email,
+            name: email.split("@")[0],
+            password: await bcrypt.hash(randomUUID(), 12),
+            role: "Viewer",
+            companyId: company.id,
+            isActive: true,
+          },
+        });
+        return {
+          id: created.id,
+          email: created.email,
+          name: created.name,
+          role: created.role,
+          companyId: created.companyId,
         };
       },
     }),

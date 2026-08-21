@@ -51,7 +51,7 @@ export async function POST(req: NextRequest) {
   const email = typeof body?.email === "string" ? body.email.trim().toLowerCase() : "";
   const password = typeof body?.password === "string" ? body.password : "";
   const name = typeof body?.name === "string" ? body.name.trim() || null : null;
-  const role = body?.role === "Admin" ? "Admin" : "User";
+  const role = body?.role === "Admin" ? "Admin" : body?.role === "Viewer" ? "Viewer" : "User";
   const companyId = typeof body?.companyId === "string" && body.companyId ? body.companyId : null;
   const isActive = body?.isActive !== false;
   const aiApiKey = typeof body?.aiApiKey === "string" ? body.aiApiKey.trim() : "";

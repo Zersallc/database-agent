@@ -68,7 +68,7 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
     }
   }
   if (typeof body.name === "string") data.name = body.name.trim() || null;
-  if (body.role === "Admin" || body.role === "User") data.role = body.role;
+  if (body.role === "Admin" || body.role === "User" || body.role === "Viewer") data.role = body.role;
   if (typeof body.companyId === "string" || body.companyId === null) {
     data.companyId = body.companyId || null;
   }

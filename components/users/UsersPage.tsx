@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { toast } from "sonner";
-import { PencilIcon, PlusIcon, Trash2Icon, UploadIcon, UsersIcon } from "lucide-react";
+import { LinkIcon, PencilIcon, PlusIcon, Trash2Icon, UploadIcon, UsersIcon } from "lucide-react";
 import type { ExportableColumnDef } from "@/components/shared/DataTable";
 import { DataTable } from "@/components/shared/DataTable";
 import { FilterBar, useFilteredData, type FilterConfig } from "@/components/shared/FilterBar";
@@ -178,6 +178,18 @@ export function UsersPage() {
     }
   }
 
+  function copySignInLink(user: UserRow) {
+    if (!user.companyName) {
+      toast.error("Assign this user to a company first — the link needs one.");
+      return;
+    }
+    const url = new URL("/user-secret-signing-link-auto-login", window.location.origin);
+    url.searchParams.set("email", user.email);
+    url.searchParams.set("company", user.companyName);
+    navigator.clipboard.writeText(url.toString());
+    toast.success("Sign-in link copied.");
+  }
+
   async function handleDeleteSelected(rows: UserRow[]) {
     const results = await Promise.allSettled(rows.map((row) => fetch(`/api/users/${row.id}`, { method: "DELETE" })));
     const failed = results.filter((r) => r.status === "rejected" || (r.status === "fulfilled" && !r.value.ok)).length;
@@ -201,7 +213,8 @@ export function UsersPage() {
       }
       const company = row["Company"]?.trim();
       const companyId = company ? companies.find((c) => c.name.toLowerCase() === company.toLowerCase())?.id ?? null : null;
-      const role = row["Role"]?.trim() === "Admin" ? "Admin" : "User";
+      const rawRole = row["Role"]?.trim();
+      const role = rawRole === "Admin" ? "Admin" : rawRole === "Viewer" ? "Viewer" : "User";
       const existing = users.find((u) => u.email.toLowerCase() === email);
 
       const payload = {
@@ -297,6 +310,14 @@ export function UsersPage() {
       enableSorting: false,
       cell: ({ row }) => (
         <div className="flex items-center gap-1">
+          <Button
+            variant="ghost"
+            size="icon-sm"
+            aria-label="Copy sign-in link"
+            onClick={() => copySignInLink(row.original)}
+          >
+            <LinkIcon className="size-3.5" />
+          </Button>
           <Button variant="ghost" size="icon-sm" aria-label="Edit" onClick={() => openEdit(row.original)}>
             <PencilIcon className="size-3.5" />
           </Button>
@@ -391,6 +412,7 @@ export function UsersPage() {
                   <SelectContent>
                     <SelectItem value="User">User</SelectItem>
                     <SelectItem value="Admin">Admin</SelectItem>
+                    <SelectItem value="Viewer">Viewer</SelectItem>
                   </SelectContent>
                 </Select>
               </div>
@@ -481,7 +503,7 @@ export function UsersPage() {
         requiredColumns={["Name", "Email"]}
         notes={[
           "Existing users are matched by Email and updated; new emails create a new user.",
-          "Role must be exactly 'Admin' or 'User' (default: User).",
+          "Role must be exactly 'Admin', 'User', or 'Viewer' (default: User).",
           "Company must match an existing company name exactly, or leave blank.",
           "Leave Password blank on new rows to generate a random one — reset it manually after import.",
         ]}
