@@ -46,8 +46,6 @@ type UserRow = {
   companyId: string | null;
   companyName: string | null;
   isActive: boolean;
-  hasAiApiKey: boolean;
-  aiApiKeyHint: string | null;
   createdAt: string;
   updatedAt: string;
 };
@@ -59,8 +57,6 @@ type FormState = {
   role: string;
   companyId: string;
   isActive: boolean;
-  aiApiKey: string;
-  clearAiApiKey: boolean;
 };
 
 const EMPTY_FORM: FormState = {
@@ -70,8 +66,6 @@ const EMPTY_FORM: FormState = {
   role: "User",
   companyId: "",
   isActive: true,
-  aiApiKey: "",
-  clearAiApiKey: false,
 };
 
 const FILTER_CONFIG: FilterConfig<UserRow>[] = [
@@ -127,8 +121,6 @@ export function UsersPage() {
       role: user.role,
       companyId: user.companyId ?? "",
       isActive: user.isActive,
-      aiApiKey: "",
-      clearAiApiKey: false,
     });
     setFormError(null);
     setDialogOpen(true);
@@ -148,8 +140,6 @@ export function UsersPage() {
       isActive: form.isActive,
     };
     if (form.password) payload.password = form.password;
-    if (form.clearAiApiKey) payload.aiApiKey = "";
-    else if (form.aiApiKey) payload.aiApiKey = form.aiApiKey;
 
     const url = editing ? `/api/users/${editing.id}` : "/api/users";
     const method = editing ? "PATCH" : "POST";
@@ -288,17 +278,6 @@ export function UsersPage() {
       ),
     },
     {
-      accessorKey: "aiApiKeyHint",
-      header: "AI Key",
-      meta: { exportHeader: "AI Key", exportValue: (row) => (row.hasAiApiKey ? "set" : "") },
-      cell: ({ row }) =>
-        row.original.hasAiApiKey ? (
-          <span className="font-mono text-xs text-muted-foreground">{row.original.aiApiKeyHint}</span>
-        ) : (
-          <span className="text-xs text-muted-foreground">Not set</span>
-        ),
-    },
-    {
       accessorKey: "createdAt",
       header: "Created",
       meta: { exportHeader: "Created At", exportValue: (row) => row.createdAt },
@@ -435,29 +414,6 @@ export function UsersPage() {
                   </SelectContent>
                 </Select>
               </div>
-            </div>
-
-            <div className="space-y-1.5">
-              <Label htmlFor="user-ai-key">AI provider API key</Label>
-              <Input
-                id="user-ai-key"
-                type="password"
-                value={form.aiApiKey}
-                disabled={form.clearAiApiKey}
-                onChange={(e) => setForm({ ...form, aiApiKey: e.target.value })}
-                placeholder={editing?.hasAiApiKey ? `Set (${editing.aiApiKeyHint}) — leave blank to keep` : "Optional — personal key for this user"}
-              />
-              {editing?.hasAiApiKey && (
-                <label className="flex items-center gap-1.5 text-xs text-muted-foreground">
-                  <input
-                    type="checkbox"
-                    checked={form.clearAiApiKey}
-                    onChange={(e) => setForm({ ...form, clearAiApiKey: e.target.checked, aiApiKey: "" })}
-                    className="size-3.5 accent-primary"
-                  />
-                  Remove the stored key
-                </label>
-              )}
             </div>
 
             <div className="flex items-center justify-between rounded-lg border border-border px-3 py-2">

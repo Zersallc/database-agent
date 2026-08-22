@@ -101,7 +101,7 @@ export async function POST(request: Request): Promise<Response> {
       }
     }
 
-    const resolved = await resolveModelClient(principal.tenantId, principal.userId);
+    const resolved = await resolveModelClient(principal.tenantId);
 
     let reply = "";
     for await (const event of runAgent({
