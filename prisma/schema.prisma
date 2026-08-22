@@ -28,13 +28,6 @@ model User {
   company   Company? @relation(fields: [companyId], references: [id])
   isActive  Boolean  @default(true)
 
-  /// AES-256-GCM ciphertext (base64), the user's personal AI provider key. Never
-  /// sent to the client — only aiApiKeyHint is. Null means none is set.
-  aiApiKeyEnc  String?
-  /// Last 4 characters, masked, for display only ("••••ab12"). Enough to tell
-  /// which key is installed; useless to anyone who intercepts it.
-  aiApiKeyHint String?
-
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
@@ -62,9 +55,9 @@ model AppDocument {
 
 /// Encrypted key/value secret store backing lib/providers' SecretStore
 /// interface (connection passwords, model-provider API keys) when
-/// SECRET_DRIVER=postgres. Same AES-256-GCM scheme as User.aiApiKeyEnc
-/// (lib/crypto.ts) — the plaintext exists only at write time and at the
-/// moment a connector actually needs it.
+/// SECRET_DRIVER=postgres. Same AES-256-GCM scheme as lib/crypto.ts — the
+/// plaintext exists only at write time and at the moment a connector
+/// actually needs it.
 model AppSecret {
   handle    String   @id
   valueEnc  String

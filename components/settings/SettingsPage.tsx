@@ -1,6 +1,8 @@
 "use client";
 
+import { useSession } from "next-auth/react";
 import { PageHeader } from "@/components/app-shell/PageHeader";
+import { Card, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { useSettings } from "@/lib/settings-store";
 import { ModelProviderSection } from "./ModelProviderSection";
 import {
@@ -12,6 +14,8 @@ import {
 
 export function SettingsPage() {
   const settings = useSettings();
+  const { data: session } = useSession();
+  const isAdmin = session?.user?.role === "Admin";
 
   return (
     <div className="flex h-svh flex-col">
@@ -26,8 +30,21 @@ export function SettingsPage() {
             </p>
           </div>
 
-          {/* First: without a provider nothing else in the workspace answers. */}
-          <ModelProviderSection />
+          {/* First: without a provider nothing else in the workspace answers.
+              It's shared by the whole company, so only an admin changes it. */}
+          {isAdmin ? (
+            <ModelProviderSection />
+          ) : (
+            <Card>
+              <CardHeader>
+                <CardTitle>Model provider</CardTitle>
+                <CardDescription>
+                  Which AI answers questions in this workspace — shared by everyone at your
+                  company. Ask an admin to change it.
+                </CardDescription>
+              </CardHeader>
+            </Card>
+          )}
           <AppearanceSection settings={settings} />
           <ChatSection settings={settings} />
           <ConnectionsSection settings={settings} />

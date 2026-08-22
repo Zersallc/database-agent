@@ -2,7 +2,6 @@ import { NextRequest, NextResponse } from "next/server";
 import bcrypt from "bcryptjs";
 import { prisma } from "@/lib/db";
 import { requireAdminSession } from "@/lib/require-admin";
-import { encryptSecret, hintFor } from "@/lib/crypto";
 
 function serializeUser(user: {
   id: string;
@@ -12,7 +11,6 @@ function serializeUser(user: {
   companyId: string | null;
   company: { id: string; name: string } | null;
   isActive: boolean;
-  aiApiKeyHint: string | null;
   createdAt: Date;
   updatedAt: Date;
 }) {
@@ -24,8 +22,6 @@ function serializeUser(user: {
     companyId: user.companyId,
     companyName: user.company?.name ?? null,
     isActive: user.isActive,
-    hasAiApiKey: user.aiApiKeyHint !== null,
-    aiApiKeyHint: user.aiApiKeyHint,
     createdAt: user.createdAt,
     updatedAt: user.updatedAt,
   };
@@ -54,7 +50,6 @@ export async function POST(req: NextRequest) {
   const role = body?.role === "Admin" ? "Admin" : body?.role === "Viewer" ? "Viewer" : "User";
   const companyId = typeof body?.companyId === "string" && body.companyId ? body.companyId : null;
   const isActive = body?.isActive !== false;
-  const aiApiKey = typeof body?.aiApiKey === "string" ? body.aiApiKey.trim() : "";
 
   if (!email || !email.includes("@")) {
     return NextResponse.json({ error: "A valid email is required." }, { status: 400 });
@@ -78,8 +73,6 @@ export async function POST(req: NextRequest) {
       role,
       companyId,
       isActive,
-      aiApiKeyEnc: aiApiKey ? encryptSecret(aiApiKey) : null,
-      aiApiKeyHint: aiApiKey ? hintFor(aiApiKey) : null,
     },
     include: { company: { select: { id: true, name: true } } },
   });

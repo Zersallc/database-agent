@@ -2,7 +2,6 @@ import { NextRequest, NextResponse } from "next/server";
 import bcrypt from "bcryptjs";
 import { prisma } from "@/lib/db";
 import { requireAdminSession } from "@/lib/require-admin";
-import { encryptSecret, hintFor } from "@/lib/crypto";
 
 function serializeUser(user: {
   id: string;
@@ -12,7 +11,6 @@ function serializeUser(user: {
   companyId: string | null;
   company: { id: string; name: string } | null;
   isActive: boolean;
-  aiApiKeyHint: string | null;
   createdAt: Date;
   updatedAt: Date;
 }) {
@@ -24,8 +22,6 @@ function serializeUser(user: {
     companyId: user.companyId,
     companyName: user.company?.name ?? null,
     isActive: user.isActive,
-    hasAiApiKey: user.aiApiKeyHint !== null,
-    aiApiKeyHint: user.aiApiKeyHint,
     createdAt: user.createdAt,
     updatedAt: user.updatedAt,
   };
@@ -53,8 +49,6 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
     companyId?: string | null;
     isActive?: boolean;
     password?: string;
-    aiApiKeyEnc?: string | null;
-    aiApiKeyHint?: string | null;
   } = {};
 
   if (typeof body.email === "string" && body.email.trim()) {
@@ -79,15 +73,6 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
       return NextResponse.json({ error: "Password must be at least 8 characters." }, { status: 400 });
     }
     data.password = await bcrypt.hash(body.password, 12);
-  }
-
-  // aiApiKey: omitted -> unchanged. Non-empty string -> re-encrypt. Explicit
-  // empty string -> clear it. Distinguishing "omitted" from "empty" is why
-  // this checks `"aiApiKey" in body` rather than truthiness.
-  if ("aiApiKey" in body) {
-    const key = typeof body.aiApiKey === "string" ? body.aiApiKey.trim() : "";
-    data.aiApiKeyEnc = key ? encryptSecret(key) : null;
-    data.aiApiKeyHint = key ? hintFor(key) : null;
   }
 
   const user = await prisma.user.update({

@@ -6,7 +6,7 @@
  * talks to (see lib/db.ts), rather than adding a second data store
  * technology. Two tables: app_documents (one row per document, JSONB payload
  * — see prisma/schema.prisma) and app_secrets (encrypted key/value, same
- * AES-256-GCM scheme as User.aiApiKeyEnc in lib/crypto.ts).
+ * AES-256-GCM scheme as lib/crypto.ts).
  *
  * Filtering/sorting semantics are written to match MemoryDocumentStore
  * exactly (same `compare()`, same "find the anchor in the full sorted list"
