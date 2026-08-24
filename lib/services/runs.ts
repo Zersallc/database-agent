@@ -186,6 +186,49 @@ export async function* executeRun(
     // in settings must take effect on the next question, not the next deploy.
     const resolved = await resolveModelClient(tenantId);
 
+    // Fixed to this app's own Postgres schema (Report/Inventory/item_sustainability),
+    // not the dynamically-configured `connection` above — a conversation's chosen
+    // data source has no bearing on whether the ESG report pipeline is available.
+    const reportGenerator: NonNullable<Parameters<typeof runAgent>[0]["reportGenerator"]> = {
+      generate: async ({ hospitalName, year, month }) => {
+        const { aggregateEsgReport } = await import("./esg-report");
+        const { renderEsgReportPdf } = await import("@/lib/reports/esg-pdf");
+        const { renderEsgReportExcel } = await import("@/lib/reports/esg-excel");
+        const { createReportFile } = await import("./report-files");
+
+        const data = await aggregateEsgReport({ hospitalName, year, month });
+        const slug = `${hospitalName.replace(/[^a-z0-9]+/gi, "-")}-${year}-${String(month).padStart(2, "0")}`;
+
+        const [pdfBytes, xlsxBytes] = await Promise.all([
+          renderEsgReportPdf(data),
+          renderEsgReportExcel(data),
+        ]);
+
+        const [pdfDoc, xlsxDoc] = await Promise.all([
+          createReportFile(tenantId, {
+            name: `esg-report-${slug}.pdf`,
+            mimeType: "application/pdf",
+            bytes: pdfBytes,
+            userId,
+          }),
+          createReportFile(tenantId, {
+            name: `esg-report-${slug}.xlsx`,
+            mimeType: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            bytes: xlsxBytes,
+            userId,
+          }),
+        ]);
+
+        return {
+          itemsRemoved: data.itemsRemoved,
+          files: [
+            { name: pdfDoc.name, downloadUrl: `/api/v1/reports/${pdfDoc.id}/download` },
+            { name: xlsxDoc.name, downloadUrl: `/api/v1/reports/${xlsxDoc.id}/download` },
+          ],
+        };
+      },
+    };
+
     for await (const event of runAgent({
       question: input.content,
       history,
@@ -193,6 +236,7 @@ export async function* executeRun(
       responseDetail: input.responseDetail,
       connection: agentConnection,
       client: resolved?.client ?? null,
+      reportGenerator,
     })) {
       if (event.type === "step") {
         steps.push(event.step);

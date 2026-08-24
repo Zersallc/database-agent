@@ -127,6 +127,9 @@ export async function POST(request: Request): Promise<Response> {
             },
           }
         : null,
+      // This legacy endpoint predates report generation and nothing exercises
+      // it anymore; the real v1 API (lib/services/runs.ts) wires it up.
+      reportGenerator: null,
     })) {
       if (event.type === "completed") reply = event.content;
       if (event.type === "failed") throw event.error;

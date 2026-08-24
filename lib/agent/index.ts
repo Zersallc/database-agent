@@ -65,6 +65,14 @@ export type AgentConnection = {
   execute: (sql: string) => Promise<{ queryId: string; result: QueryResult }>;
 };
 
+/** Lets the agent produce a downloadable Monthly ESG/GHG report on request. */
+export type ReportGenerator = {
+  generate: (params: { hospitalName: string; year: number; month: number }) => Promise<{
+    itemsRemoved: number;
+    files: { name: string; downloadUrl: string }[];
+  }>;
+};
+
 export type AgentRunInput = {
   question: string;
   /** Prior turns, oldest first. Excludes the current question. */
@@ -80,6 +88,8 @@ export type AgentRunInput = {
   client: ModelClient | null;
   /** Reasoning depth. Only the Anthropic adapter acts on it. */
   effort?: string;
+  /** Null when report generation isn't wired for this run (no hospital data connected). */
+  reportGenerator: ReportGenerator | null;
 };
 
 const RUN_SQL_TOOL: ToolDefinition = {
@@ -101,6 +111,30 @@ const RUN_SQL_TOOL: ToolDefinition = {
       },
     },
     required: ["sql", "purpose"],
+    additionalProperties: false,
+  },
+};
+
+const GENERATE_ESG_REPORT_TOOL: ToolDefinition = {
+  name: "generate_esg_report",
+  description:
+    "Generates a downloadable Monthly ESG, Waste and GHG Report (PDF and Excel) for one hospital and " +
+    "one calendar month. Call this when the user asks to generate, create, produce, or download a " +
+    "sustainability, ESG, GHG, or waste report for a specific hospital and month. Use the exact hospital " +
+    "name as it appears in the database — run a query against Report.\"Hospital Name\" first if you are not " +
+    "certain of the exact spelling. After calling this, tell the user what the report covers and give them " +
+    "the download link(s) from the result as markdown links.",
+  parameters: {
+    type: "object",
+    properties: {
+      hospital_name: {
+        type: "string",
+        description: "Exact hospital name, matching Report.\"Hospital Name\" in the database.",
+      },
+      year: { type: "integer", description: "Calendar year, e.g. 2026." },
+      month: { type: "integer", description: "Calendar month, 1-12." },
+    },
+    required: ["hospital_name", "year", "month"],
     additionalProperties: false,
   },
 };
@@ -145,7 +179,10 @@ export async function* runAgent(input: AgentRunInput): AsyncGenerator<AgentEvent
     { role: "user", content: input.question },
   ];
 
-  const tools = input.connection ? [RUN_SQL_TOOL] : [];
+  const tools = [
+    ...(input.connection ? [RUN_SQL_TOOL] : []),
+    ...(input.reportGenerator ? [GENERATE_ESG_REPORT_TOOL] : []),
+  ];
   let answer = "";
   let model: string | null = null;
   let inputTokens = 0;
@@ -214,6 +251,62 @@ export async function* runAgent(input: AgentRunInput): AsyncGenerator<AgentEvent
       });
 
       for (const call of turn.toolCalls) {
+        if (call.name === GENERATE_ESG_REPORT_TOOL.name) {
+          if (!input.reportGenerator) {
+            messages.push({
+              role: "tool",
+              toolCallId: call.id,
+              toolName: call.name,
+              content: "Report generation is not available in this workspace.",
+              isError: true,
+            });
+            continue;
+          }
+
+          const hospitalName = typeof call.input.hospital_name === "string" ? call.input.hospital_name : "";
+          const year = typeof call.input.year === "number" ? call.input.year : NaN;
+          const month = typeof call.input.month === "number" ? call.input.month : NaN;
+
+          if (!hospitalName.trim() || !Number.isInteger(year) || !Number.isInteger(month) || month < 1 || month > 12) {
+            messages.push({
+              role: "tool",
+              toolCallId: call.id,
+              toolName: call.name,
+              content: "Missing or invalid 'hospital_name', 'year', or 'month' (month must be 1-12).",
+              isError: true,
+            });
+            continue;
+          }
+
+          try {
+            const generated = await input.reportGenerator.generate({ hospitalName, year, month });
+            yield emit({
+              label: `Generated ESG report for ${hospitalName}`,
+              status: "done",
+              detail: `${generated.itemsRemoved} item${generated.itemsRemoved === 1 ? "" : "s"} covered`,
+              query_id: null,
+            });
+            messages.push({
+              role: "tool",
+              toolCallId: call.id,
+              toolName: call.name,
+              content: JSON.stringify(generated),
+              isError: false,
+            });
+          } catch (error) {
+            const detail = error instanceof Error ? error.message : String(error);
+            yield emit({ label: `Generating ESG report for ${hospitalName}`, status: "failed", detail, query_id: null });
+            messages.push({
+              role: "tool",
+              toolCallId: call.id,
+              toolName: call.name,
+              content: `Report generation failed: ${detail}`,
+              isError: true,
+            });
+          }
+          continue;
+        }
+
         if (call.name !== RUN_SQL_TOOL.name || !input.connection) {
           messages.push({
             role: "tool",

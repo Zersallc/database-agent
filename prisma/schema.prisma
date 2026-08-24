@@ -53,6 +53,65 @@ model AppDocument {
   @@map("app_documents")
 }
 
+/// Per-item sustainability reference data (weight, volume, embodied CO2e),
+/// AI-estimated from the item catalog. Keyed by item_id, matching the
+/// Sheet's own Items.ID / Ewaste.ID (same value in both tabs) — that is the
+/// real stable identifier in the source catalog. item_name is kept unique
+/// and required alongside it because it is the only join key that works
+/// against the externally-owned Report table: Report has no numeric item ID,
+/// only a free-text "Description" column. Report is joined to this table by
+/// item_name at report-generation time; nothing here is written into Report
+/// itself.
+model ItemSustainability {
+  itemId                  String    @id @map("item_id")
+  itemName                String    @unique @map("item_name")
+  category                String?
+  classification          String?
+  weightKg                Float?    @map("weight_kg")
+  weightSource            String?   @map("weight_source")
+  volumeM3                Float?    @map("volume_m3")
+  materialCategory        String?   @map("material_category")
+  emissionFactorKgCo2eKg  Float?    @map("emission_factor_kg_co2e_per_kg")
+  co2eKg                  Float?    @map("co2e_kg")
+  estimationNotes         String?
+  estimatedAt             DateTime? @map("estimated_at")
+  createdAt               DateTime  @default(now()) @map("created_at")
+  updatedAt               DateTime  @default(now()) @updatedAt @map("updated_at")
+
+  @@map("item_sustainability")
+}
+
+/// One-time snapshot mirror of the Google Sheet's Inventory tab — one row
+/// per individual physical asset within a Register transaction, linking it
+/// to its Item, Hospital, Warehouse and Client (all by Sheet ID) and back to
+/// its parent Register entry. Column names match the Sheet exactly so this
+/// reads as a literal, auditable copy of the source, not a reinterpretation
+/// of it. Populated by a migration script, not a live sync — re-run it to
+/// refresh. `Report.ID` corresponds to `Inventory.ID`.
+model Inventory {
+  id                 String    @id @map("ID")
+  sn                 String?   @map("SN")
+  createdBy          String?   @map("Created by")
+  createdDateTime    DateTime? @map("Created DateTime")
+  lastEditedBy       String?   @map("Last Edited by")
+  lastEditedDateTime DateTime? @map("Last Edited DateTime")
+  register           String?   @map("Register")
+  dateTime           DateTime? @map("DateTime")
+  type               String?   @map("Type")
+  inventoriedId      String?   @map("Inventoried ID")
+  item               String?   @map("Item")
+  hospital           String?   @map("Hospital")
+  warehouse          String?   @map("Warehouse")
+  client             String?   @map("Client")
+  quantity           Float?    @map("Quantity")
+  unitPrice          Float?    @map("Unit Price")
+  price              Float?    @map("Price")
+  assetNo            String?   @map("Asset No")
+  description        String?   @map("Description")
+
+  @@map("Inventory")
+}
+
 /// Encrypted key/value secret store backing lib/providers' SecretStore
 /// interface (connection passwords, model-provider API keys) when
 /// SECRET_DRIVER=postgres. Same AES-256-GCM scheme as lib/crypto.ts — the

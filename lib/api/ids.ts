@@ -24,6 +24,7 @@ export const ID_PREFIX = {
   query: "qry",
   skill: "skl",
   file: "file",
+  reportFile: "rpt",
   request: "req",
 } as const;
 

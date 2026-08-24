@@ -31,6 +31,7 @@ export const COLLECTIONS = [
   "playbooks",
   "skills",
   "files",
+  "reports",
 ] as const;
 
 export type Collection = (typeof COLLECTIONS)[number];
