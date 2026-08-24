@@ -5,6 +5,7 @@ import { PageHeader } from "@/components/app-shell/PageHeader";
 import { Card, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { useSettings } from "@/lib/settings-store";
 import { ModelProviderSection } from "./ModelProviderSection";
+import { ReportBrandingSection } from "./ReportBrandingSection";
 import {
   AppearanceSection,
   ChatSection,
@@ -45,6 +46,7 @@ export function SettingsPage() {
               </CardHeader>
             </Card>
           )}
+          {isAdmin && <ReportBrandingSection />}
           <AppearanceSection settings={settings} />
           <ChatSection settings={settings} />
           <ConnectionsSection settings={settings} />

@@ -32,6 +32,7 @@ export const COLLECTIONS = [
   "skills",
   "files",
   "reports",
+  "report_settings",
 ] as const;
 
 export type Collection = (typeof COLLECTIONS)[number];

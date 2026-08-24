@@ -8,6 +8,12 @@
 import ExcelJS from "exceljs";
 import type { EsgReportData } from "@/lib/services/esg-report";
 
+export type ExcelBranding = {
+  companyName: string;
+  /** Only set for an uploaded logo — exceljs embeds raster images, not the default SVG mark. */
+  logo: { base64: string; extension: "png" | "jpeg" } | null;
+};
+
 const HEADER_FILL: ExcelJS.Fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FFE3E7DE" } };
 const TOTAL_FILL: ExcelJS.Fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FFDFEAE5" } };
 
@@ -26,19 +32,34 @@ function styleTotal(row: ExcelJS.Row) {
   });
 }
 
-export async function renderEsgReportExcel(data: EsgReportData): Promise<Buffer> {
+const DEFAULT_BRANDING: ExcelBranding = { companyName: "Medi Merchant", logo: null };
+
+export async function renderEsgReportExcel(
+  data: EsgReportData,
+  branding: ExcelBranding = DEFAULT_BRANDING
+): Promise<Buffer> {
   const wb = new ExcelJS.Workbook();
-  wb.creator = "Medi Merchant Database Agent";
+  wb.creator = `${branding.companyName} Database Agent`;
   wb.created = new Date(data.generatedAt);
 
   // --- Summary ---
   const summary = wb.addWorksheet("Summary");
   summary.columns = [{ width: 34 }, { width: 20 }];
+
+  // Images float over cells rather than occupying row space, so reserve blank
+  // rows only for visual clearance, not because the image needs them.
+  if (branding.logo) {
+    const imageId = wb.addImage({ base64: branding.logo.base64, extension: branding.logo.extension });
+    summary.addImage(imageId, { tl: { col: 0, row: 0 }, ext: { width: 140, height: 40 } });
+    summary.addRow([]);
+    summary.addRow([]);
+    summary.addRow([]);
+  }
   summary.addRow(["Monthly ESG, Waste and GHG Report"]).font = { bold: true, size: 14 };
   summary.addRow([]);
   summary.addRow([data.scope.kind === "group" ? "Client Group" : "Client", data.scopeLabel]);
   summary.addRow(["Reporting period", data.periodLabel]);
-  summary.addRow(["Prepared by", "Medi Merchant"]);
+  summary.addRow(["Prepared by", branding.companyName]);
   summary.addRow(["Methodology", "UK Government GHG Conversion Factors for Company Reporting 2026"]);
   summary.addRow(["Generated", new Date(data.generatedAt).toLocaleString("en-ZA")]);
   summary.addRow([]);

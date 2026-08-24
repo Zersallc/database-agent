@@ -195,18 +195,42 @@ export async function* executeRun(
         const { renderEsgReportPdf } = await import("@/lib/reports/esg-pdf");
         const { renderEsgReportExcel } = await import("@/lib/reports/esg-excel");
         const { createReportFile } = await import("./report-files");
+        const { getReportSettings } = await import("./report-settings");
 
         const scope = hospitalName
           ? ({ kind: "hospital", hospitalName } as const)
           : ({ kind: "group", hospitalGroup: hospitalGroup! } as const);
-        const data = await aggregateEsgReport({ scope, year, month });
+        const [data, reportSettings] = await Promise.all([
+          aggregateEsgReport({ scope, year, month }),
+          getReportSettings(tenantId),
+        ]);
         const scopeSlug = (hospitalName ?? hospitalGroup ?? "report").replace(/[^a-z0-9]+/gi, "-");
         const periodSlug = month ? `${year}-${String(month).padStart(2, "0")}` : `${year}`;
         const slug = `${scopeSlug}-${periodSlug}`;
 
+        const pdfBranding = {
+          companyName: reportSettings.company_name,
+          logoDataUrl:
+            reportSettings.logo_base64 && reportSettings.logo_mime_type
+              ? `data:${reportSettings.logo_mime_type};base64,${reportSettings.logo_base64}`
+              : null,
+        };
+        const excelBranding = {
+          companyName: reportSettings.company_name,
+          logo:
+            reportSettings.logo_base64 && reportSettings.logo_mime_type
+              ? {
+                  base64: reportSettings.logo_base64,
+                  extension: (reportSettings.logo_mime_type === "image/png" ? "png" : "jpeg") as
+                    | "png"
+                    | "jpeg",
+                }
+              : null,
+        };
+
         const [pdfBytes, xlsxBytes] = await Promise.all([
-          renderEsgReportPdf(data),
-          renderEsgReportExcel(data),
+          renderEsgReportPdf(data, pdfBranding),
+          renderEsgReportExcel(data, excelBranding),
         ]);
 
         const [pdfDoc, xlsxDoc] = await Promise.all([

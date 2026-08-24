@@ -31,6 +31,8 @@ export const SCOPES = [
   "users:write",
   "files:read",
   "files:write",
+  "report_settings:read",
+  "report_settings:write",
 ] as const;
 
 export type Scope = (typeof SCOPES)[number];
@@ -46,6 +48,7 @@ const READ_SCOPES: Scope[] = [
   "playbook:read",
   "users:read",
   "files:read",
+  "report_settings:read",
 ];
 
 /**

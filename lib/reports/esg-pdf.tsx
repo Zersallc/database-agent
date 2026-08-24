@@ -10,8 +10,17 @@
  * not a form to fill in by hand.
  */
 
-import { Document, Page, View, Text, StyleSheet, renderToBuffer } from "@react-pdf/renderer";
+import { Document, Page, View, Text, Image, StyleSheet, renderToBuffer } from "@react-pdf/renderer";
 import type { EsgReportData } from "@/lib/services/esg-report";
+import { MediMerchantLogo } from "./logo";
+
+export type ReportBranding = {
+  companyName: string;
+  /** data: URL of an uploaded logo. Falls back to the default vector mark when null. */
+  logoDataUrl: string | null;
+};
+
+const DEFAULT_BRANDING: ReportBranding = { companyName: "Medi Merchant", logoDataUrl: null };
 
 const COLORS = {
   ink: "#16241f",
@@ -112,14 +121,26 @@ function SectionHead({ num, title }: { num: string; title: string }) {
   );
 }
 
-export function EsgReportDocument({ data }: { data: EsgReportData }) {
+export function EsgReportDocument({
+  data,
+  branding = DEFAULT_BRANDING,
+}: {
+  data: EsgReportData;
+  branding?: ReportBranding;
+}) {
   const reused = data.byRoute.filter((r) => r.route === "Donation" || r.route === "Sale");
   const reusedTotal = reused.reduce((s, r) => s + r.weightKg, 0);
 
   return (
     <Document>
       <Page size="A4" style={styles.page}>
-        <Text style={styles.wordmark}>MEDI MERCHANT</Text>
+        {branding.logoDataUrl ? (
+          <Image src={branding.logoDataUrl} style={{ height: 22, marginBottom: 4 }} />
+        ) : (
+          <View style={{ marginBottom: 4 }}>
+            <MediMerchantLogo height={16} />
+          </View>
+        )}
         <Text style={styles.title}>Monthly ESG, Waste and GHG Report</Text>
 
         <View style={styles.metaGrid}>
@@ -133,7 +154,7 @@ export function EsgReportDocument({ data }: { data: EsgReportData }) {
           </View>
           <View style={styles.metaCell}>
             <Text style={styles.metaLabel}>PREPARED BY</Text>
-            <Text style={styles.metaValue}>Medi Merchant</Text>
+            <Text style={styles.metaValue}>{branding.companyName}</Text>
           </View>
           <View style={styles.metaCell}>
             <Text style={styles.metaLabel}>METHODOLOGY</Text>
@@ -141,14 +162,15 @@ export function EsgReportDocument({ data }: { data: EsgReportData }) {
           </View>
         </View>
         <Text style={styles.muted}>
-          Reporting boundary: equipment and waste collected from {data.scopeLabel} and managed by Medi
-          Merchant during {data.periodLabel}. UK Government (DESNZ) factors are applied to South African
-          operations, as no directly published South African national equivalent factor set is used.
+          Reporting boundary: equipment and waste collected from {data.scopeLabel} and managed by{" "}
+          {branding.companyName} during {data.periodLabel}. UK Government (DESNZ) factors are applied to
+          South African operations, as no directly published South African national equivalent factor set
+          is used.
         </Text>
 
         <SectionHead num="01" title="Executive Summary" />
         <Text style={styles.para}>
-          During {data.periodLabel}, Medi Merchant processed {fmt(data.itemsRemoved, 0)} items, weighing{" "}
+          During {data.periodLabel}, {branding.companyName} processed {fmt(data.itemsRemoved, 0)} items, weighing{" "}
           {fmt(data.totalWeightTonnes, 3)} tonnes, from {data.scopeLabel}. Of this material,{" "}
           {fmt(data.totals.reusedTonnes, 3)} tonnes were reused through sale or donation,{" "}
           {fmt(data.totals.recycledTonnes, 3)} tonnes were recycled, and {fmt(data.totals.landfillTonnes, 3)}{" "}
@@ -307,13 +329,17 @@ export function EsgReportDocument({ data }: { data: EsgReportData }) {
         </Text>
 
         <Text style={styles.footer}>
-          Medi Merchant - Database Agent ESG report - generated {new Date(data.generatedAt).toLocaleString("en-ZA")}
+          {branding.companyName} - Database Agent ESG report - generated{" "}
+          {new Date(data.generatedAt).toLocaleString("en-ZA")}
         </Text>
       </Page>
     </Document>
   );
 }
 
-export async function renderEsgReportPdf(data: EsgReportData): Promise<Buffer> {
-  return renderToBuffer(<EsgReportDocument data={data} />);
+export async function renderEsgReportPdf(
+  data: EsgReportData,
+  branding?: ReportBranding
+): Promise<Buffer> {
+  return renderToBuffer(<EsgReportDocument data={data} branding={branding} />);
 }
