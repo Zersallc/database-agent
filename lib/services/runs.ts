@@ -190,14 +190,19 @@ export async function* executeRun(
     // not the dynamically-configured `connection` above — a conversation's chosen
     // data source has no bearing on whether the ESG report pipeline is available.
     const reportGenerator: NonNullable<Parameters<typeof runAgent>[0]["reportGenerator"]> = {
-      generate: async ({ hospitalName, year, month }) => {
+      generate: async ({ hospitalName, hospitalGroup, year, month }) => {
         const { aggregateEsgReport } = await import("./esg-report");
         const { renderEsgReportPdf } = await import("@/lib/reports/esg-pdf");
         const { renderEsgReportExcel } = await import("@/lib/reports/esg-excel");
         const { createReportFile } = await import("./report-files");
 
-        const data = await aggregateEsgReport({ hospitalName, year, month });
-        const slug = `${hospitalName.replace(/[^a-z0-9]+/gi, "-")}-${year}-${String(month).padStart(2, "0")}`;
+        const scope = hospitalName
+          ? ({ kind: "hospital", hospitalName } as const)
+          : ({ kind: "group", hospitalGroup: hospitalGroup! } as const);
+        const data = await aggregateEsgReport({ scope, year, month });
+        const scopeSlug = (hospitalName ?? hospitalGroup ?? "report").replace(/[^a-z0-9]+/gi, "-");
+        const periodSlug = month ? `${year}-${String(month).padStart(2, "0")}` : `${year}`;
+        const slug = `${scopeSlug}-${periodSlug}`;
 
         const [pdfBytes, xlsxBytes] = await Promise.all([
           renderEsgReportPdf(data),

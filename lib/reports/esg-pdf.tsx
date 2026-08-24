@@ -124,8 +124,8 @@ export function EsgReportDocument({ data }: { data: EsgReportData }) {
 
         <View style={styles.metaGrid}>
           <View style={styles.metaCell}>
-            <Text style={styles.metaLabel}>CLIENT</Text>
-            <Text style={styles.metaValue}>{data.hospitalName}</Text>
+            <Text style={styles.metaLabel}>{data.scope.kind === "group" ? "CLIENT GROUP" : "CLIENT"}</Text>
+            <Text style={styles.metaValue}>{data.scopeLabel}</Text>
           </View>
           <View style={styles.metaCell}>
             <Text style={styles.metaLabel}>REPORTING PERIOD</Text>
@@ -141,7 +141,7 @@ export function EsgReportDocument({ data }: { data: EsgReportData }) {
           </View>
         </View>
         <Text style={styles.muted}>
-          Reporting boundary: equipment and waste collected from {data.hospitalName} and managed by Medi
+          Reporting boundary: equipment and waste collected from {data.scopeLabel} and managed by Medi
           Merchant during {data.periodLabel}. UK Government (DESNZ) factors are applied to South African
           operations, as no directly published South African national equivalent factor set is used.
         </Text>
@@ -149,7 +149,7 @@ export function EsgReportDocument({ data }: { data: EsgReportData }) {
         <SectionHead num="01" title="Executive Summary" />
         <Text style={styles.para}>
           During {data.periodLabel}, Medi Merchant processed {fmt(data.itemsRemoved, 0)} items, weighing{" "}
-          {fmt(data.totalWeightTonnes, 3)} tonnes, from {data.hospitalName}. Of this material,{" "}
+          {fmt(data.totalWeightTonnes, 3)} tonnes, from {data.scopeLabel}. Of this material,{" "}
           {fmt(data.totals.reusedTonnes, 3)} tonnes were reused through sale or donation,{" "}
           {fmt(data.totals.recycledTonnes, 3)} tonnes were recycled, and {fmt(data.totals.landfillTonnes, 3)}{" "}
           tonnes were sent to landfill. The resulting landfill-diversion rate was{" "}

@@ -19,13 +19,18 @@
  * populated on 100% of rows regardless of Type.
  */
 
+import { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/db";
 
+export type EsgReportScope =
+  | { kind: "hospital"; hospitalName: string }
+  | { kind: "group"; hospitalGroup: string };
+
 export type EsgReportParams = {
-  hospitalName: string;
+  scope: EsgReportScope;
   year: number;
-  /** 1-12 */
-  month: number;
+  /** 1-12. Omit for the full calendar year. */
+  month?: number;
 };
 
 type BaseRow = {
@@ -76,9 +81,12 @@ export type DataQualityRow = {
 };
 
 export type EsgReportData = {
-  hospitalName: string;
+  scopeLabel: string;
+  scope: EsgReportScope;
+  /** Hospitals with at least one covered transaction, out of the total in scope. Only meaningful for group scope. */
+  hospitalsCovered: { withActivity: number; totalInGroup: number } | null;
   year: number;
-  month: number;
+  month: number | null;
   periodLabel: string;
   generatedAt: string;
   itemsRemoved: number;
@@ -131,19 +139,29 @@ const WASTE_TYPES = new Set(["Scrap", "Recycling", "Land Fill"]);
 /** Types that represent the item's life being extended (avoided-manufacturing benefit applies). */
 const REUSE_TYPES = new Set(["Donation", "Sale"]);
 
-function monthRange(year: number, month: number) {
-  const start = new Date(Date.UTC(year, month - 1, 1));
-  const end = new Date(Date.UTC(year, month, 1));
-  return { start, end };
+function periodRange(year: number, month?: number) {
+  if (month) {
+    return { start: new Date(Date.UTC(year, month - 1, 1)), end: new Date(Date.UTC(year, month, 1)) };
+  }
+  return { start: new Date(Date.UTC(year, 0, 1)), end: new Date(Date.UTC(year + 1, 0, 1)) };
 }
 
 export async function aggregateEsgReport(params: EsgReportParams): Promise<EsgReportData> {
-  const { hospitalName, year, month } = params;
-  const { start, end } = monthRange(year, month);
+  const { scope, year, month } = params;
+  const { start, end } = periodRange(year, month);
 
-  const rows = await prisma.$queryRaw<BaseRow[]>`
+  const scopeFilter =
+    scope.kind === "hospital"
+      ? Prisma.sql`r."Hospital Name" = ${scope.hospitalName}`
+      : Prisma.sql`r."Hospital Name" IN (
+          SELECT "Hospital Name" FROM "Hospitals"
+          WHERE "Hospital Group" = ${scope.hospitalGroup} AND "Hospital Name" IS NOT NULL
+        )`;
+
+  const rows = await prisma.$queryRaw<(BaseRow & { hospital_name: string })[]>(Prisma.sql`
     SELECT
       r."Type" AS type,
+      r."Hospital Name" AS hospital_name,
       i."Quantity" AS qty,
       s.weight_kg,
       s.volume_m3,
@@ -153,13 +171,26 @@ export async function aggregateEsgReport(params: EsgReportParams): Promise<EsgRe
     FROM "Report" r
     JOIN "Inventory" i ON r."ID" = i."ID"
     LEFT JOIN item_sustainability s ON i."Item" = s.item_id
-    WHERE r."Hospital Name" = ${hospitalName}
+    WHERE ${scopeFilter}
       AND r."Type" IS NOT NULL
       AND r."Type" != 'Removal'
       AND r."Date uplifted" >= ${start}
       AND r."Date uplifted" < ${end}
       AND i."Quantity" IS NOT NULL
-  `;
+  `);
+
+  let hospitalsCovered: EsgReportData["hospitalsCovered"] = null;
+  let scopeLabel: string;
+  if (scope.kind === "hospital") {
+    scopeLabel = scope.hospitalName;
+  } else {
+    const totalInGroup = await prisma.hospital.count({
+      where: { hospitalGroup: scope.hospitalGroup, hospitalName: { not: null } },
+    });
+    const withActivity = new Set(rows.map((r) => r.hospital_name)).size;
+    hospitalsCovered = { withActivity, totalInGroup };
+    scopeLabel = `${scope.hospitalGroup} (${withActivity} of ${totalInGroup} hospitals with activity)`;
+  }
 
   const itemsRemoved = rows.reduce((sum, r) => sum + (r.qty ?? 0), 0);
   const totalWeightKg = rows.reduce((sum, r) => sum + (r.weight_kg ?? 0) * (r.qty ?? 0), 0);
@@ -275,10 +306,12 @@ export async function aggregateEsgReport(params: EsgReportParams): Promise<EsgRe
     : 0;
 
   return {
-    hospitalName,
+    scopeLabel,
+    scope,
+    hospitalsCovered,
     year,
-    month,
-    periodLabel: `${MONTH_NAMES[month - 1]} ${year}`,
+    month: month ?? null,
+    periodLabel: month ? `${MONTH_NAMES[month - 1]} ${year}` : `${year}`,
     generatedAt: new Date().toISOString(),
     itemsRemoved,
     totalWeightTonnes: totalTonnes,

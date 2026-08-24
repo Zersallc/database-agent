@@ -112,6 +112,40 @@ model Inventory {
   @@map("Inventory")
 }
 
+/// One-time snapshot mirror of the Google Sheet's Hospitals tab. "Hospital
+/// Group" is the authoritative corporate-group classification (e.g. "Life
+/// Healthcare", "Mediclinic") — not derivable from Hospital Name text, which
+/// is why this table exists: it lets a report be scoped to a whole group,
+/// joined by Report."Hospital Name" = Hospitals."Hospital Name". Column
+/// names match the Sheet exactly, same convention as Inventory. Populated by
+/// a migration script, not a live sync.
+model Hospital {
+  id              String    @id @map("ID")
+  createdBy       String?   @map("Created by")
+  createdDateTime DateTime? @map("Created DateTime")
+  lastEditedBy    String?   @map("Last Edited by")
+  lastEditedDateTime DateTime? @map("Last Edited DateTime")
+  counter         Float?    @map("Counter")
+  hospitalType    String?   @map("Hospital Type")
+  hospitalName    String?   @map("Hospital Name")
+  address         String?   @map("Address")
+  map             String?   @map("Map")
+  phone           String?   @map("Phone")
+  email           String?   @map("Email")
+  hospitalSize    String?   @map("Hospital Size")
+  contactName     String?   @map("Contact Name")
+  hoContactName   String?   @map("HO Contact Name")
+  hoAddress       String?   @map("HO Address")
+  hoContactNumber String?   @map("HO Contact Number")
+  hoEmail         String?   @map("HO Email")
+  hospitalGroup   String?   @map("Hospital Group")
+  availableStock  Float?    @map("Available Stock")
+  unitPrice       Float?    @map("Unit Price")
+  totalPrice      Float?    @map("Total Price")
+
+  @@map("Hospitals")
+}
+
 /// Encrypted key/value secret store backing lib/providers' SecretStore
 /// interface (connection passwords, model-provider API keys) when
 /// SECRET_DRIVER=postgres. Same AES-256-GCM scheme as lib/crypto.ts — the

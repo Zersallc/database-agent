@@ -36,7 +36,7 @@ export async function renderEsgReportExcel(data: EsgReportData): Promise<Buffer>
   summary.columns = [{ width: 34 }, { width: 20 }];
   summary.addRow(["Monthly ESG, Waste and GHG Report"]).font = { bold: true, size: 14 };
   summary.addRow([]);
-  summary.addRow(["Client", data.hospitalName]);
+  summary.addRow([data.scope.kind === "group" ? "Client Group" : "Client", data.scopeLabel]);
   summary.addRow(["Reporting period", data.periodLabel]);
   summary.addRow(["Prepared by", "Medi Merchant"]);
   summary.addRow(["Methodology", "UK Government GHG Conversion Factors for Company Reporting 2026"]);

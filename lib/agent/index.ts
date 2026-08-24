@@ -65,9 +65,15 @@ export type AgentConnection = {
   execute: (sql: string) => Promise<{ queryId: string; result: QueryResult }>;
 };
 
-/** Lets the agent produce a downloadable Monthly ESG/GHG report on request. */
+/** Lets the agent produce a downloadable Monthly/Annual ESG/GHG report on request. */
 export type ReportGenerator = {
-  generate: (params: { hospitalName: string; year: number; month: number }) => Promise<{
+  generate: (params: {
+    hospitalName?: string;
+    hospitalGroup?: string;
+    year: number;
+    /** 1-12. Omit for a full calendar year. */
+    month?: number;
+  }) => Promise<{
     itemsRemoved: number;
     files: { name: string; downloadUrl: string }[];
   }>;
@@ -118,23 +124,30 @@ const RUN_SQL_TOOL: ToolDefinition = {
 const GENERATE_ESG_REPORT_TOOL: ToolDefinition = {
   name: "generate_esg_report",
   description:
-    "Generates a downloadable Monthly ESG, Waste and GHG Report (PDF and Excel) for one hospital and " +
-    "one calendar month. Call this when the user asks to generate, create, produce, or download a " +
-    "sustainability, ESG, GHG, or waste report for a specific hospital and month. Use the exact hospital " +
-    "name as it appears in the database — run a query against Report.\"Hospital Name\" first if you are not " +
-    "certain of the exact spelling. After calling this, tell the user what the report covers and give them " +
-    "the download link(s) from the result as markdown links.",
+    "Generates a downloadable ESG, Waste and GHG Report (PDF and Excel) for one hospital OR one hospital " +
+    "group, for one calendar month OR a full calendar year. Call this when the user asks to generate, " +
+    "create, produce, or download a sustainability, ESG, GHG, or waste report. Provide exactly one of " +
+    "hospital_name or hospital_group — never both. Use the exact hospital name as it appears in the " +
+    "database (query Report.\"Hospital Name\" first if unsure of the spelling), or the exact hospital group " +
+    "name (query Hospitals.\"Hospital Group\" first if unsure — real groups include values like " +
+    "'Life Healthcare' and 'Mediclinic', not the hospital's own name). Omit month for a full-year report. " +
+    "After calling this, tell the user what the report covers and give them the download link(s) from the " +
+    "result as markdown links.",
   parameters: {
     type: "object",
     properties: {
       hospital_name: {
         type: "string",
-        description: "Exact hospital name, matching Report.\"Hospital Name\" in the database.",
+        description: "Exact hospital name, matching Report.\"Hospital Name\". Omit if using hospital_group.",
+      },
+      hospital_group: {
+        type: "string",
+        description: "Exact hospital group name, matching Hospitals.\"Hospital Group\". Omit if using hospital_name.",
       },
       year: { type: "integer", description: "Calendar year, e.g. 2026." },
-      month: { type: "integer", description: "Calendar month, 1-12." },
+      month: { type: "integer", description: "Calendar month, 1-12. Omit for a full calendar year." },
     },
-    required: ["hospital_name", "year", "month"],
+    required: ["year"],
     additionalProperties: false,
   },
 };
@@ -263,25 +276,38 @@ export async function* runAgent(input: AgentRunInput): AsyncGenerator<AgentEvent
             continue;
           }
 
-          const hospitalName = typeof call.input.hospital_name === "string" ? call.input.hospital_name : "";
+          const hospitalNameRaw = typeof call.input.hospital_name === "string" ? call.input.hospital_name.trim() : "";
+          const hospitalGroupRaw = typeof call.input.hospital_group === "string" ? call.input.hospital_group.trim() : "";
           const year = typeof call.input.year === "number" ? call.input.year : NaN;
-          const month = typeof call.input.month === "number" ? call.input.month : NaN;
+          const month = typeof call.input.month === "number" ? call.input.month : undefined;
+          const scopeLabel = hospitalNameRaw || hospitalGroupRaw || "the requested scope";
 
-          if (!hospitalName.trim() || !Number.isInteger(year) || !Number.isInteger(month) || month < 1 || month > 12) {
+          const bothOrNeither = Boolean(hospitalNameRaw) === Boolean(hospitalGroupRaw);
+          if (
+            bothOrNeither ||
+            !Number.isInteger(year) ||
+            (month !== undefined && (!Number.isInteger(month) || month < 1 || month > 12))
+          ) {
             messages.push({
               role: "tool",
               toolCallId: call.id,
               toolName: call.name,
-              content: "Missing or invalid 'hospital_name', 'year', or 'month' (month must be 1-12).",
+              content:
+                "Provide exactly one of 'hospital_name' or 'hospital_group' (not both, not neither), a valid 'year', and an optional 'month' between 1 and 12.",
               isError: true,
             });
             continue;
           }
 
           try {
-            const generated = await input.reportGenerator.generate({ hospitalName, year, month });
+            const generated = await input.reportGenerator.generate({
+              hospitalName: hospitalNameRaw || undefined,
+              hospitalGroup: hospitalGroupRaw || undefined,
+              year,
+              month,
+            });
             yield emit({
-              label: `Generated ESG report for ${hospitalName}`,
+              label: `Generated ESG report for ${scopeLabel}`,
               status: "done",
               detail: `${generated.itemsRemoved} item${generated.itemsRemoved === 1 ? "" : "s"} covered`,
               query_id: null,
@@ -295,7 +321,7 @@ export async function* runAgent(input: AgentRunInput): AsyncGenerator<AgentEvent
             });
           } catch (error) {
             const detail = error instanceof Error ? error.message : String(error);
-            yield emit({ label: `Generating ESG report for ${hospitalName}`, status: "failed", detail, query_id: null });
+            yield emit({ label: `Generating ESG report for ${scopeLabel}`, status: "failed", detail, query_id: null });
             messages.push({
               role: "tool",
               toolCallId: call.id,
