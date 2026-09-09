@@ -43,6 +43,26 @@ const TYPE_NAMES: Record<number, string> = {
   3802: "jsonb",
 };
 
+/**
+ * Tables and views the user actually owns.
+ *
+ * `pg_catalog` and `information_schema` are the obvious exclusions, but an
+ * installed extension puts its own relations in ordinary schemas: on the client
+ * database, `pg_stat_statements` and `pg_stat_statements_info` sit in `public`
+ * beside the one real table. They are query-monitoring views, not data, and
+ * they cost 357 of the 627 tokens the schema block spent on every request
+ * (measured 9 September 2026) — more than the real table — while offering the
+ * model 45 plausible column names it has no business querying.
+ *
+ * `pg_depend.deptype = 'e'` marks anything a `CREATE EXTENSION` brought with it,
+ * whatever schema it landed in — but only its **views** are excluded here.
+ * Extensions also ship reference data that a question legitimately needs:
+ * PostGIS's `spatial_ref_sys` is an extension-owned table people join to for
+ * SRID lookups, and hiding it would break real queries. Extension views are
+ * monitoring and introspection; extension tables are often data. A relation the
+ * schema's own designer created is never marked this way regardless of the
+ * schema it sits in, so hand-built tables in `public` are untouched.
+ */
 const INTROSPECTION_SQL = `
   SELECT c.table_schema,
          c.table_name,
@@ -74,6 +94,15 @@ const INTROSPECTION_SQL = `
      AND col.objsubid = c.ordinal_position
    WHERE c.table_schema NOT IN ('pg_catalog', 'information_schema')
      AND t.table_type IN ('BASE TABLE', 'VIEW')
+     AND NOT EXISTS (
+       SELECT 1
+         FROM pg_catalog.pg_class ec
+         JOIN pg_catalog.pg_namespace en ON en.oid = ec.relnamespace
+         JOIN pg_catalog.pg_depend ed ON ed.objid = ec.oid AND ed.deptype = 'e'
+        WHERE en.nspname = c.table_schema
+          AND ec.relname = c.table_name
+          AND ec.relkind IN ('v', 'm')
+     )
    ORDER BY c.table_schema, c.table_name, c.ordinal_position
 `;
 
