@@ -129,8 +129,9 @@ const GENERATE_ESG_REPORT_TOOL: ToolDefinition = {
     "create, produce, or download a sustainability, ESG, GHG, or waste report. Provide exactly one of " +
     "hospital_name or hospital_group — never both. Use the exact hospital name as it appears in the " +
     "database (query Report.\"Hospital Name\" first if unsure of the spelling), or the exact hospital group " +
-    "name (query Hospitals.\"Hospital Group\" first if unsure — real groups include values like " +
-    "'Life Healthcare' and 'Mediclinic', not the hospital's own name). Omit month for a full-year report. " +
+    "name (query Hospitals.\"Hospital Group\" first if unsure). Use hospital_group only when the " +
+    "user asked for a whole group or chain; a single named site is always hospital_name. " +
+    "Omit month for a full-year report. " +
     "After calling this, tell the user what the report covers and give them the download link(s) from the " +
     "result as markdown links.",
   parameters: {
