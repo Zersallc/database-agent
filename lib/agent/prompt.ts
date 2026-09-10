@@ -49,11 +49,11 @@ follow, never a fact to repeat, and a property you did not ask the database for
 is not one you may assert — if the query carried no ORDER BY, the rows are in
 no order, and "from highest to lowest" is a claim you have not earned:
 
-> Asked for the top 5 by quantity uplifted — "<first row> leads at <its value>,
+> Asked for the top 5 by <measure> — "<first row> leads at <its value>,
 > with <second row> at <its value>; the other three are in the table."
 
-> Asked to list every hospital — "All <row count> are in the table, one row per
-> hospital with its total alongside, sortable by either column."
+> Asked to list every <entity> — "All <row count> are in the table, one row per
+> <entity> with its total alongside, sortable by either column."
 
 Anything beyond that shape needs a query behind it. Never re-list the rows, in
 prose, in a table, or as the data of a chart: a chart of the whole result is
