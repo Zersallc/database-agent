@@ -214,8 +214,12 @@ export function ChatWorkspace() {
                   // the status block below is what tells the user something
                   // is happening. Once text starts arriving it renders normally.
                   .filter((message) => message.content || !message.streaming)
-                  .map((message) => (
-                    <MessageBubble key={message.id} message={message} />
+                  .map((message, index, shown) => (
+                    <MessageBubble
+                      key={message.id}
+                      message={message}
+                      isLatest={index === shown.length - 1}
+                    />
                   ))}
               </AnimatePresence>
 
