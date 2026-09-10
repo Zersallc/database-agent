@@ -44,6 +44,13 @@ export type AgentStep = {
 export type AgentEvent =
   | { type: "step"; step: AgentStep }
   | { type: "delta"; text: string }
+  /**
+   * Discard everything streamed so far: the turn is being retried and the text
+   * already sent was the answer being replaced. Without this the reader would
+   * watch a fabricated answer arrive and stay on screen next to its
+   * replacement.
+   */
+  | { type: "reset" }
   | {
       type: "completed";
       content: string;
@@ -52,6 +59,31 @@ export type AgentEvent =
       usage: { input_tokens: number; output_tokens: number } | null;
     }
   | { type: "failed"; error: ApiError; steps: AgentStep[] };
+
+/**
+ * Did this turn present data that no query produced?
+ *
+ * ```table``` and ```chart``` are *results*. Emitting one without having called
+ * a tool means the numbers in it came from the model, and nothing downstream
+ * can tell that apart from numbers a database returned — the failure that put
+ * invented hospital names in front of a user.
+ *
+ * ```sql``` is deliberately NOT in this set, and that is the whole lesson of the
+ * previous attempt at this retry. "Write me a query for X, do not run it" is a
+ * legitimate request that produces exactly that block and no tool call; the
+ * earlier detector fired on it and ran the query anyway, overriding an explicit
+ * instruction. A widened detector bought a false positive worse than the bug.
+ * Since the interface now renders the real query from the tool call, an
+ * unbacked ```sql``` block is visibly empty rather than silently wrong, so it
+ * does not need forcing.
+ *
+ * Prose fabrication — "Free 15 · Pro 20 · Enterprise 10" in a sentence — is not
+ * caught here and cannot be, without a predicate for "asserted a quantity
+ * without a query" that nobody has yet written.
+ */
+function presentsUnbackedData(text: string): boolean {
+  return /```(table|chart)\b/.test(text);
+}
 
 export type AgentConnection = {
   name: string;
@@ -199,6 +231,12 @@ export async function* runAgent(input: AgentRunInput): AsyncGenerator<AgentEvent
   ];
   let answer = "";
   let model: string | null = null;
+  // How many tools this run has actually called, and whether the forced retry
+  // has already been spent. Both are per-run, not per-iteration: a turn that
+  // queried and then summarised has done its work and must not be retried.
+  let toolCallsMade = 0;
+  let forcedRetryUsed = false;
+  let toolChoice: "auto" | "required" = "auto";
   let inputTokens = 0;
   let outputTokens = 0;
 
@@ -212,6 +250,7 @@ export async function* runAgent(input: AgentRunInput): AsyncGenerator<AgentEvent
         tools,
         maxTokens: MAX_TOKENS,
         effort: input.effort ?? "high",
+        toolChoice,
       })) {
         if (event.type === "text_delta") {
           answer += event.text;
@@ -247,6 +286,46 @@ export async function* runAgent(input: AgentRunInput): AsyncGenerator<AgentEvent
       }
 
       if (turn.stopReason !== "tool_use" || turn.toolCalls.length === 0) {
+        /**
+         * The retry. A turn that ran no query and yet presented data is
+         * answering from the model rather than from the database, so ask again
+         * with the tool made mandatory.
+         *
+         * Three conditions, and each one is load-bearing:
+         *
+         * - `toolCallsMade === 0`. A run that queried and then drew a chart of
+         *   the result is correct, and forcing it again would query twice.
+         * - `presentsUnbackedData`. Blanket `tool_choice: "required"` would make
+         *   "hi" run a query, which `CORE_BEHAVIOR` deliberately prevents. The
+         *   detector is what keeps small talk out: a greeting has no table in
+         *   it.
+         * - `!forcedRetryUsed`. One attempt. If the model produces a chart with
+         *   no query even when a tool is mandatory, that is a different failure
+         *   and looping on it would only cost tokens.
+         */
+        if (
+          !forcedRetryUsed &&
+          toolCallsMade === 0 &&
+          tools.length > 0 &&
+          presentsUnbackedData(answer)
+        ) {
+          forcedRetryUsed = true;
+          toolChoice = "required";
+          yield emit({
+            label: "Answered without running a query — retrying",
+            status: "done",
+            detail: "The reply presented data that no query produced.",
+            query_id: null,
+          });
+          // Nothing was appended to `messages` on this path, so the model is
+          // asked the original question again rather than shown its own bad
+          // answer — which it would otherwise imitate, the same self-imitation
+          // that caused this.
+          answer = "";
+          yield { type: "reset" };
+          continue;
+        }
+
         yield {
           type: "completed",
           content: answer.trim(),
@@ -263,6 +342,12 @@ export async function* runAgent(input: AgentRunInput): AsyncGenerator<AgentEvent
         toolCalls: turn.toolCalls,
         raw: turn.raw,
       });
+
+      toolCallsMade += turn.toolCalls.length;
+      // The forcing is spent as soon as it works: leaving it on would make
+      // every later turn of this run mandatory too, including the one that
+      // just summarises the rows.
+      toolChoice = "auto";
 
       for (const call of turn.toolCalls) {
         if (call.name === GENERATE_ESG_REPORT_TOOL.name) {
@@ -373,7 +458,7 @@ export async function* runAgent(input: AgentRunInput): AsyncGenerator<AgentEvent
             role: "tool",
             toolCallId: call.id,
             toolName: call.name,
-            content: JSON.stringify(summarize(result)),
+            content: JSON.stringify(summarize(result, sql)),
             isError: false,
           });
         } catch (error) {
@@ -421,7 +506,53 @@ export async function* runAgent(input: AgentRunInput): AsyncGenerator<AgentEvent
  * for nothing. The user still gets the full result — this trim only applies to
  * what goes back into the conversation.
  */
-function summarize(result: QueryResult) {
+/** Keywords inside quoted text are not keywords. Blank the literals first. */
+function withoutLiterals(sql: string): string {
+  return sql.replace(/'(?:[^']|'')*'/g, "''").replace(/"(?:[^"]|"")*"/g, '""');
+}
+
+/**
+ * What these rows do and do not establish.
+ *
+ * Told "the data is not available in the database", a reader believes it. The
+ * agent said exactly that about `Donation Value` — 40,618 populated rows
+ * totalling 34,171,960.53 — after running `LIMIT 5` with no `ORDER BY`, landing
+ * on five small suppliers whose values happened to be null, and generalising
+ * from them to the whole table. Real query, real rows, read correctly; the
+ * error was entirely in the inference.
+ *
+ * An instruction not to over-generalise would sit in the prompt competing with
+ * everything else there, and today's evidence is that prose loses. This is a
+ * fact in the payload the model is already reading, next to the rows it is
+ * reasoning from — the arbitrariness of the sample stated where the sample is.
+ */
+function samplingNote(sql: string, result: QueryResult): string | null {
+  const bare = withoutLiterals(sql).toLowerCase();
+  const arbitrary = /\blimit\s+\d/.test(bare) && !/\border\s+by\b/.test(bare);
+  const held = result.truncated || result.rows.length > ROWS_IN_CONTEXT;
+
+  if (arbitrary) {
+    return (
+      "These rows are an arbitrary subset: the query has a LIMIT and no ORDER BY, " +
+      "so the database returned whichever rows it reached first. They are not the " +
+      "largest, the smallest, or a representative sample, and nothing about the " +
+      "rest of the table follows from them — in particular, a null or zero here " +
+      "does not mean the column is empty elsewhere. To say anything about the " +
+      "table as a whole (a total, a maximum, whether a column is ever populated), " +
+      "run a query that aggregates over all of it."
+    );
+  }
+  if (held) {
+    return (
+      "Not every matching row is here. What is missing may differ from what is " +
+      "shown, so describe this as a partial result or query the whole of it."
+    );
+  }
+  return null;
+}
+
+function summarize(result: QueryResult, sql: string) {
+  const sampling = samplingNote(sql, result);
   return {
     columns: result.columns.map((column) => column.name),
     rows: result.rows.slice(0, ROWS_IN_CONTEXT),
@@ -429,6 +560,7 @@ function summarize(result: QueryResult) {
     rows_shown: Math.min(result.rows.length, ROWS_IN_CONTEXT),
     truncated: result.truncated || result.rows.length > ROWS_IN_CONTEXT,
     duration_ms: result.duration_ms,
+    ...(sampling ? { sampling } : {}),
   };
 }
 

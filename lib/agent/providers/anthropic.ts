@@ -98,7 +98,17 @@ export class AnthropicModelClient implements ModelClient {
         // The system prompt is identical across every turn of a conversation and
         // large — it carries the whole schema — so it is the cache breakpoint.
         system: [{ type: "text", text: request.system, cache_control: { type: "ephemeral" } }],
-        ...(request.tools.length > 0 ? { tools: request.tools.map(toAnthropicTool) } : {}),
+        ...(request.tools.length > 0
+          ? {
+              tools: request.tools.map(toAnthropicTool),
+              // Anthropic spells "required" as `any` — call some tool, your
+              // choice which. `tool` would pin one, which is not what the
+              // retry means.
+              ...(request.toolChoice === "required"
+                ? { tool_choice: { type: "any" as const } }
+                : {}),
+            }
+          : {}),
         messages: toAnthropicMessages(request.messages),
       });
     } catch (error) {
