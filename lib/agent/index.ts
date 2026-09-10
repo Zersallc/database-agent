@@ -44,6 +44,13 @@ export type AgentStep = {
 export type AgentEvent =
   | { type: "step"; step: AgentStep }
   | { type: "delta"; text: string }
+  /**
+   * Discard everything streamed so far: the turn is being retried and the text
+   * already sent was the answer being replaced. Without this the reader would
+   * watch a fabricated answer arrive and stay on screen next to its
+   * replacement.
+   */
+  | { type: "reset" }
   | {
       type: "completed";
       content: string;
@@ -52,6 +59,31 @@ export type AgentEvent =
       usage: { input_tokens: number; output_tokens: number } | null;
     }
   | { type: "failed"; error: ApiError; steps: AgentStep[] };
+
+/**
+ * Did this turn present data that no query produced?
+ *
+ * ```table``` and ```chart``` are *results*. Emitting one without having called
+ * a tool means the numbers in it came from the model, and nothing downstream
+ * can tell that apart from numbers a database returned â€” the failure that put
+ * invented hospital names in front of a user.
+ *
+ * ```sql``` is deliberately NOT in this set, and that is the whole lesson of the
+ * previous attempt at this retry. "Write me a query for X, do not run it" is a
+ * legitimate request that produces exactly that block and no tool call; the
+ * earlier detector fired on it and ran the query anyway, overriding an explicit
+ * instruction. A widened detector bought a false positive worse than the bug.
+ * Since the interface now renders the real query from the tool call, an
+ * unbacked ```sql``` block is visibly empty rather than silently wrong, so it
+ * does not need forcing.
+ *
+ * Prose fabrication â€” "Free 15 Â· Pro 20 Â· Enterprise 10" in a sentence â€” is not
+ * caught here and cannot be, without a predicate for "asserted a quantity
+ * without a query" that nobody has yet written.
+ */
+function presentsUnbackedData(text: string): boolean {
+  return /```(table|chart)\b/.test(text);
+}
 
 export type AgentConnection = {
   name: string;
@@ -199,6 +231,12 @@ export async function* runAgent(input: AgentRunInput): AsyncGenerator<AgentEvent
   ];
   let answer = "";
   let model: string | null = null;
+  // How many tools this run has actually called, and whether the forced retry
+  // has already been spent. Both are per-run, not per-iteration: a turn that
+  // queried and then summarised has done its work and must not be retried.
+  let toolCallsMade = 0;
+  let forcedRetryUsed = false;
+  let toolChoice: "auto" | "required" = "auto";
   let inputTokens = 0;
   let outputTokens = 0;
 
@@ -212,6 +250,7 @@ export async function* runAgent(input: AgentRunInput): AsyncGenerator<AgentEvent
         tools,
         maxTokens: MAX_TOKENS,
         effort: input.effort ?? "high",
+        toolChoice,
       })) {
         if (event.type === "text_delta") {
           answer += event.text;
@@ -247,6 +286,46 @@ export async function* runAgent(input: AgentRunInput): AsyncGenerator<AgentEvent
       }
 
       if (turn.stopReason !== "tool_use" || turn.toolCalls.length === 0) {
+        /**
+         * The retry. A turn that ran no query and yet presented data is
+         * answering from the model rather than from the database, so ask again
+         * with the tool made mandatory.
+         *
+         * Three conditions, and each one is load-bearing:
+         *
+         * - `toolCallsMade === 0`. A run that queried and then drew a chart of
+         *   the result is correct, and forcing it again would query twice.
+         * - `presentsUnbackedData`. Blanket `tool_choice: "required"` would make
+         *   "hi" run a query, which `CORE_BEHAVIOR` deliberately prevents. The
+         *   detector is what keeps small talk out: a greeting has no table in
+         *   it.
+         * - `!forcedRetryUsed`. One attempt. If the model produces a chart with
+         *   no query even when a tool is mandatory, that is a different failure
+         *   and looping on it would only cost tokens.
+         */
+        if (
+          !forcedRetryUsed &&
+          toolCallsMade === 0 &&
+          tools.length > 0 &&
+          presentsUnbackedData(answer)
+        ) {
+          forcedRetryUsed = true;
+          toolChoice = "required";
+          yield emit({
+            label: "Answered without running a query â€” retrying",
+            status: "done",
+            detail: "The reply presented data that no query produced.",
+            query_id: null,
+          });
+          // Nothing was appended to `messages` on this path, so the model is
+          // asked the original question again rather than shown its own bad
+          // answer â€” which it would otherwise imitate, the same self-imitation
+          // that caused this.
+          answer = "";
+          yield { type: "reset" };
+          continue;
+        }
+
         yield {
           type: "completed",
           content: answer.trim(),
@@ -263,6 +342,12 @@ export async function* runAgent(input: AgentRunInput): AsyncGenerator<AgentEvent
         toolCalls: turn.toolCalls,
         raw: turn.raw,
       });
+
+      toolCallsMade += turn.toolCalls.length;
+      // The forcing is spent as soon as it works: leaving it on would make
+      // every later turn of this run mandatory too, including the one that
+      // just summarises the rows.
+      toolChoice = "auto";
 
       for (const call of turn.toolCalls) {
         if (call.name === GENERATE_ESG_REPORT_TOOL.name) {

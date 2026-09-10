@@ -86,6 +86,11 @@ export type RunEvent =
   | { type: "run.created"; run_id: string; run: ReturnType<typeof serializeRun> }
   | { type: "run.step"; run_id: string; step: AgentStep }
   | { type: "run.content_delta"; run_id: string; delta: string }
+  /**
+   * Discard the deltas sent so far. The agent retried the turn, and what was
+   * streamed is being replaced rather than continued.
+   */
+  | { type: "run.content_reset"; run_id: string }
   | { type: "run.completed"; run_id: string; run: ReturnType<typeof serializeRun> }
   | { type: "run.failed"; run_id: string; run: ReturnType<typeof serializeRun>; error: unknown };
 
@@ -272,6 +277,8 @@ export async function* executeRun(
         yield { type: "run.step", run_id: runId, step: event.step };
       } else if (event.type === "delta") {
         yield { type: "run.content_delta", run_id: runId, delta: event.text };
+      } else if (event.type === "reset") {
+        yield { type: "run.content_reset", run_id: runId };
       } else if (event.type === "completed") {
         final = event;
       } else {
