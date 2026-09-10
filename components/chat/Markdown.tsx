@@ -49,7 +49,20 @@ function safeParseJSON<T>(text: string): T | null {
   }
 }
 
-export function Markdown({ content }: { content: string }) {
+export function Markdown({
+  content,
+  autoRun = false,
+}: {
+  content: string;
+  /**
+   * May a ```sql block in this message run itself when the "Auto-run generated
+   * SQL" setting is on? Only the newest message says yes. Every block used to
+   * run on mount, which was free when the rows were fabricated in the browser
+   * and is not now: reopening a conversation with twenty blocks fired twenty
+   * queries at the customer's database at once, past the 60/minute limit.
+   */
+  autoRun?: boolean;
+}) {
   return (
     <div className="prose prose-sm prose-zinc max-w-none dark:prose-invert prose-p:my-2 prose-headings:my-3">
       <ReactMarkdown
@@ -77,7 +90,7 @@ export function Markdown({ content }: { content: string }) {
             const lang = (className ?? "").replace("language-", "");
 
             if (lang === "sql") {
-              return <SQLBlock sql={raw} />;
+              return <SQLBlock sql={raw} autoRun={autoRun} />;
             }
 
             if (lang === "mermaid") {

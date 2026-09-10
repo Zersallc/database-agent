@@ -63,7 +63,14 @@ function UsageLine({ message }: { message: StoreMessage }) {
   );
 }
 
-export function MessageBubble({ message }: { message: StoreMessage }) {
+export function MessageBubble({
+  message,
+  isLatest = false,
+}: {
+  message: StoreMessage;
+  /** Only the newest message may auto-run its SQL. See Markdown's `autoRun`. */
+  isLatest?: boolean;
+}) {
   const isUser = message.role === "user";
   const attachments = message.attachments ?? [];
 
@@ -91,7 +98,7 @@ export function MessageBubble({ message }: { message: StoreMessage }) {
         </>
       ) : (
         <div className="min-w-0 flex-1 text-sm">
-          <Markdown content={message.content} />
+          <Markdown content={message.content} autoRun={isLatest} />
           <UsageLine message={message} />
         </div>
       )}

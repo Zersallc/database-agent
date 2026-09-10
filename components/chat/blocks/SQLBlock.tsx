@@ -21,47 +21,141 @@ import {
   downloadText,
   safeFilename,
 } from "@/lib/export";
+import { useWorkspace } from "@/lib/chat-store";
 import { useSettings } from "@/lib/settings-store";
 import { BlockToolbar } from "./BlockToolbar";
 import { CodeBlock } from "./CodeBlock";
 import { TableBlock } from "./TableBlock";
-import { mockExecute, mockExplain, type QueryResult } from "./sql/mockExecute";
+import { executeQuery, type QueryResult } from "./sql/execute";
 
-export function SQLBlock({ sql, name = "query" }: { sql: string; name?: string }) {
-  const { autoRunSql } = useSettings();
+/** Shown instead of results when there is nothing to run the query against. */
+const NO_CONNECTION =
+  "No database is attached to this conversation, so this query was not run.";
+
+function reason(error: unknown): string {
+  return error instanceof Error ? error.message : "The query could not be run.";
+}
+
+export function SQLBlock({
+  sql,
+  name = "query",
+  autoRun = false,
+}: {
+  sql: string;
+  name?: string;
+  /** Set only for the newest message — see `Markdown`. */
+  autoRun?: boolean;
+}) {
+  const { autoRunSql: autoRunSetting } = useSettings();
+  // Both must hold: the setting is on, and this block is in the newest message.
+  const autoRunSql = autoRunSetting && autoRun;
+  const { activeConversation, activeConnection } = useWorkspace();
+  // The conversation's own connection first: that is the database the agent
+  // answered against, and re-running its SQL somewhere else would compare two
+  // different things while looking like one.
+  const connectionId = activeConversation.connectionId || activeConnection.id || "";
   const [result, setResult] = useState<QueryResult | null>(null);
+  const [error, setError] = useState<string | null>(null);
   const [explain, setExplain] = useState<string | null>(null);
   // Start in the running state when auto-run is on, so the effect below only
   // ever sets state from its callback.
-  const [running, setRunning] = useState(autoRunSql);
+  const [running, setRunning] = useState(autoRunSql && Boolean(connectionId));
   // Collapsed by default — the SQL is how the answer was produced, not the
   // answer itself. The reader who wants to check the work can expand it.
   const [open, setOpen] = useState(false);
   // Exports target the content only, so the toolbar never lands in the file.
   const contentRef = useRef<HTMLDivElement>(null);
+  // Which (connection, statement) pair auto-run has already fired for. When the
+  // result was fabricated in the browser a repeat cost nothing; now every one is
+  // a real query against the customer's database, and React re-runs this effect
+  // on remount, on StrictMode's double-invoke, and once more when the store
+  // settles and `connectionId` goes from "" to real. Six executions were
+  // observed for a single block before this.
+  const autoRan = useRef<string | null>(null);
 
   async function run() {
+    if (!connectionId) {
+      setResult(null);
+      setError(NO_CONNECTION);
+      return;
+    }
     setRunning(true);
+    setError(null);
     try {
-      setResult(await mockExecute(sql));
+      setResult(await executeQuery(connectionId, sql));
+    } catch (failure) {
+      setResult(null);
+      setError(reason(failure));
     } finally {
       setRunning(false);
     }
   }
 
+  // The database's own plan. The previous version returned a canned plan with
+  // invented costs and row estimates, which read as a real one.
+  async function toggleExplain() {
+    if (explain !== null) {
+      setExplain(null);
+      return;
+    }
+    if (!connectionId) {
+      setError(NO_CONNECTION);
+      return;
+    }
+    setExplain("Running EXPLAIN…");
+    try {
+      const plan = await executeQuery(
+        connectionId,
+        `EXPLAIN ${sql.trim().replace(/;\s*$/, "")}`
+      );
+      const text = plan.rows
+        .map((row) => row.map((c) => String(c ?? "")).join(" "))
+        .join("\n");
+      setExplain(text || "The database returned no plan for this statement.");
+    } catch (failure) {
+      setExplain(reason(failure));
+    }
+  }
+
   // "Auto-run generated SQL" in settings — execute without waiting for a click.
+  // Nothing is set synchronously here: `running` starts true when auto-run is
+  // on and there is somewhere to run, and the missing-connection message is
+  // derived below rather than stored.
   useEffect(() => {
-    if (!autoRunSql) return;
+    if (!autoRunSql || !connectionId) return;
+    const attempt = `${connectionId}\u0000${sql}`;
+    if (autoRan.current === attempt) return;
+    autoRan.current = attempt;
     let cancelled = false;
-    mockExecute(sql).then((next) => {
-      if (cancelled) return;
-      setResult(next);
-      setRunning(false);
-    });
+    let settled = false;
+    executeQuery(connectionId, sql).then(
+      (next) => {
+        settled = true;
+        if (cancelled) return;
+        setResult(next);
+        setError(null);
+        setRunning(false);
+      },
+      (failure) => {
+        settled = true;
+        if (cancelled) return;
+        setResult(null);
+        setError(reason(failure));
+        setRunning(false);
+      }
+    );
     return () => {
       cancelled = true;
+      // An attempt torn down before it answered has produced nothing, so it
+      // must not count as "already run" — StrictMode's double-invoke cancels
+      // the first pass, and leaving the mark set would strand the block with
+      // no result at all.
+      if (!settled) autoRan.current = null;
     };
-  }, [autoRunSql, sql]);
+  }, [autoRunSql, sql, connectionId]);
+
+  // Auto-run with nothing attached is a failure to report, not a silent no-op.
+  const shownError = error ?? (autoRunSql && !connectionId ? NO_CONNECTION : null);
 
   const base = safeFilename(name, "query");
 
@@ -75,7 +169,13 @@ export function SQLBlock({ sql, name = "query" }: { sql: string; name?: string }
           {running && <LoaderIcon className="size-3.5 animate-spin" />}
           {result && (
             <Badge variant="secondary" className="ml-auto">
-              {result.rowCount} rows · {result.executionTimeMs} ms
+              {result.truncated ? `first ${result.rowCount} rows` : `${result.rowCount} rows`} ·{" "}
+              {result.executionTimeMs} ms
+            </Badge>
+          )}
+          {shownError && !running && (
+            <Badge variant="destructive" className="ml-auto">
+              not run
             </Badge>
           )}
         </CollapsibleTrigger>
@@ -111,7 +211,7 @@ export function SQLBlock({ sql, name = "query" }: { sql: string; name?: string }
             <Button
               size="xs"
               variant="ghost"
-              onClick={() => setExplain((prev) => (prev ? null : mockExplain(sql)))}
+              onClick={() => void toggleExplain()}
             >
               <LightbulbIcon />
               Explain
@@ -141,6 +241,12 @@ export function SQLBlock({ sql, name = "query" }: { sql: string; name?: string }
               <pre className="mt-2 overflow-x-auto rounded-lg border border-border bg-muted/40 p-3 text-xs text-muted-foreground">
                 {explain}
               </pre>
+            )}
+
+            {shownError && (
+              <p className="mt-2 rounded-lg border border-destructive/40 bg-destructive/10 p-3 text-xs text-destructive">
+                {shownError}
+              </p>
             )}
 
             {result && (
