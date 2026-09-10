@@ -1,10 +1,12 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { motion } from "framer-motion";
 import { SparklesIcon } from "lucide-react";
 import { Dialog, DialogContent, DialogTitle } from "@/components/ui/dialog";
 import { Markdown } from "./Markdown";
+import { ExecutedQueryBlock } from "./blocks/ExecutedQueryBlock";
+import { queriesForRun, resultSignature, type ExecutedQuery } from "./blocks/sql/executed";
 import type { StoreMessage } from "@/lib/chat-store";
 import type { Attachment } from "@/lib/workspace";
 
@@ -74,6 +76,23 @@ export function MessageBubble({
   const isUser = message.role === "user";
   const attachments = message.attachments ?? [];
 
+  // The queries this message's run actually executed. Rendered from the query
+  // records, so the SQL on screen is the statement the database received
+  // rather than the model's retyping of it afterwards.
+  const [queries, setQueries] = useState<ExecutedQuery[]>([]);
+  const runId = message.runId;
+  const steps = message.steps;
+  useEffect(() => {
+    if (isUser || (!runId && !steps)) return;
+    let cancelled = false;
+    queriesForRun(runId, steps).then((found) => {
+      if (!cancelled) setQueries(found);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [isUser, runId, steps]);
+
   return (
     <motion.div
       initial={{ opacity: 0, y: 8 }}
@@ -98,7 +117,16 @@ export function MessageBubble({
         </>
       ) : (
         <div className="min-w-0 flex-1 text-sm">
-          <Markdown content={message.content} autoRun={isLatest} />
+          {queries.map((query) => (
+            <ExecutedQueryBlock key={query.id} query={query} defaultOpen={isLatest} />
+          ))}
+          <Markdown
+            content={message.content}
+            autoRun={isLatest}
+            renderedResults={
+              new Set(queries.map((q) => resultSignature(q.columns, q.rows)))
+            }
+          />
           <UsageLine message={message} />
         </div>
       )}
