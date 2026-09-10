@@ -65,7 +65,7 @@ export type AgentEvent =
  *
  * ```table``` and ```chart``` are *results*. Emitting one without having called
  * a tool means the numbers in it came from the model, and nothing downstream
- * can tell that apart from numbers a database returned â€” the failure that put
+ * can tell that apart from numbers a database returned — the failure that put
  * invented hospital names in front of a user.
  *
  * ```sql``` is deliberately NOT in this set, and that is the whole lesson of the
@@ -77,7 +77,7 @@ export type AgentEvent =
  * unbacked ```sql``` block is visibly empty rather than silently wrong, so it
  * does not need forcing.
  *
- * Prose fabrication â€” "Free 15 Â· Pro 20 Â· Enterprise 10" in a sentence â€” is not
+ * Prose fabrication — "Free 15 · Pro 20 · Enterprise 10" in a sentence — is not
  * caught here and cannot be, without a predicate for "asserted a quantity
  * without a query" that nobody has yet written.
  */
@@ -312,14 +312,14 @@ export async function* runAgent(input: AgentRunInput): AsyncGenerator<AgentEvent
           forcedRetryUsed = true;
           toolChoice = "required";
           yield emit({
-            label: "Answered without running a query â€” retrying",
+            label: "Answered without running a query — retrying",
             status: "done",
             detail: "The reply presented data that no query produced.",
             query_id: null,
           });
           // Nothing was appended to `messages` on this path, so the model is
           // asked the original question again rather than shown its own bad
-          // answer â€” which it would otherwise imitate, the same self-imitation
+          // answer — which it would otherwise imitate, the same self-imitation
           // that caused this.
           answer = "";
           yield { type: "reset" };
@@ -458,7 +458,7 @@ export async function* runAgent(input: AgentRunInput): AsyncGenerator<AgentEvent
             role: "tool",
             toolCallId: call.id,
             toolName: call.name,
-            content: JSON.stringify(summarize(result)),
+            content: JSON.stringify(summarize(result, sql)),
             isError: false,
           });
         } catch (error) {
@@ -506,7 +506,53 @@ export async function* runAgent(input: AgentRunInput): AsyncGenerator<AgentEvent
  * for nothing. The user still gets the full result — this trim only applies to
  * what goes back into the conversation.
  */
-function summarize(result: QueryResult) {
+/** Keywords inside quoted text are not keywords. Blank the literals first. */
+function withoutLiterals(sql: string): string {
+  return sql.replace(/'(?:[^']|'')*'/g, "''").replace(/"(?:[^"]|"")*"/g, '""');
+}
+
+/**
+ * What these rows do and do not establish.
+ *
+ * Told "the data is not available in the database", a reader believes it. The
+ * agent said exactly that about `Donation Value` — 40,618 populated rows
+ * totalling 34,171,960.53 — after running `LIMIT 5` with no `ORDER BY`, landing
+ * on five small suppliers whose values happened to be null, and generalising
+ * from them to the whole table. Real query, real rows, read correctly; the
+ * error was entirely in the inference.
+ *
+ * An instruction not to over-generalise would sit in the prompt competing with
+ * everything else there, and today's evidence is that prose loses. This is a
+ * fact in the payload the model is already reading, next to the rows it is
+ * reasoning from — the arbitrariness of the sample stated where the sample is.
+ */
+function samplingNote(sql: string, result: QueryResult): string | null {
+  const bare = withoutLiterals(sql).toLowerCase();
+  const arbitrary = /\blimit\s+\d/.test(bare) && !/\border\s+by\b/.test(bare);
+  const held = result.truncated || result.rows.length > ROWS_IN_CONTEXT;
+
+  if (arbitrary) {
+    return (
+      "These rows are an arbitrary subset: the query has a LIMIT and no ORDER BY, " +
+      "so the database returned whichever rows it reached first. They are not the " +
+      "largest, the smallest, or a representative sample, and nothing about the " +
+      "rest of the table follows from them — in particular, a null or zero here " +
+      "does not mean the column is empty elsewhere. To say anything about the " +
+      "table as a whole (a total, a maximum, whether a column is ever populated), " +
+      "run a query that aggregates over all of it."
+    );
+  }
+  if (held) {
+    return (
+      "Not every matching row is here. What is missing may differ from what is " +
+      "shown, so describe this as a partial result or query the whole of it."
+    );
+  }
+  return null;
+}
+
+function summarize(result: QueryResult, sql: string) {
+  const sampling = samplingNote(sql, result);
   return {
     columns: result.columns.map((column) => column.name),
     rows: result.rows.slice(0, ROWS_IN_CONTEXT),
@@ -514,6 +560,7 @@ function summarize(result: QueryResult) {
     rows_shown: Math.min(result.rows.length, ROWS_IN_CONTEXT),
     truncated: result.truncated || result.rows.length > ROWS_IN_CONTEXT,
     duration_ms: result.duration_ms,
+    ...(sampling ? { sampling } : {}),
   };
 }
 
