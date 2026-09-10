@@ -164,7 +164,10 @@ export class OpenAiCompatibleModelClient implements ModelClient {
         stream_options: { include_usage: true },
         messages: toOpenAiMessages(request.system, request.messages),
         ...(request.tools.length > 0
-          ? { tools: request.tools.map(toOpenAiTool), tool_choice: "auto" }
+          ? {
+              tools: request.tools.map(toOpenAiTool),
+              tool_choice: request.toolChoice ?? "auto",
+            }
           : {}),
       }),
     });

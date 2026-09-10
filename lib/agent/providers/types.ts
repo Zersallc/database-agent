@@ -78,6 +78,16 @@ export type ModelRequest = {
   maxTokens: number;
   /** Anthropic-only reasoning depth. Adapters without an equivalent ignore it. */
   effort: string;
+  /**
+   * Whether the model may choose not to call a tool.
+   *
+   * "auto" is the normal answer and the default: a greeting must be allowed to
+   * be a greeting. "required" is the retry described in `lib/agent/index.ts` —
+   * used only after a turn presented data with no query behind it, where the
+   * question has already been shown to warrant a tool and the model declined
+   * to reach for one.
+   */
+  toolChoice?: "auto" | "required";
 };
 
 export type ProbeOutcome = {

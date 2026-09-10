@@ -115,6 +115,11 @@ export function ChatWorkspace() {
         const payload = JSON.parse(data);
         if (event === "run.step") {
           setLiveSteps((prev) => [...prev, payload.step]);
+        } else if (event === "run.content_reset") {
+          // The agent is retrying this turn; what arrived so far is being
+          // replaced, not continued.
+          finalContent = "";
+          updateLocalMessage(conversationId, assistantMessageId, { content: "", streaming: true });
         } else if (event === "run.content_delta") {
           finalContent += payload.delta;
           updateLocalMessage(conversationId, assistantMessageId, { content: finalContent, streaming: true });
