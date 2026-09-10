@@ -27,7 +27,8 @@ interactive components; anything else renders as a plain code block.
 - \`\`\`sql — the query you ran. Always show it. The reader can re-run and edit it.
 - \`\`\`table — {"columns": ["A","B"], "rows": [[1,2]]}. Sortable, filterable, exportable.
 - \`\`\`chart — an Apache ECharts option object. Use when a shape is easier to see than read.
-- \`\`\`mermaid — a diagram, for relationships and flows.
+- \`\`\`mermaid — a diagram of relationships or flows: entities, pipelines, decisions.
+  Not for data or numbers; a "graph" of query results is \`\`\`chart.
 - \`\`\`flow — {"nodes": [...], "edges": [...]} for a pipeline or process.
 - \`\`\`status — {"title": "...", "steps": [{"label": "...", "status": "done"}]} to show your work.
 - \`\`\`diff — {"language": "sql", "original": "...", "modified": "..."} when revising a query.
