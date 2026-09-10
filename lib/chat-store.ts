@@ -35,6 +35,14 @@ export type StoreMessage = {
   streaming?: boolean;
   usage?: { input_tokens: number; output_tokens: number } | null;
   durationMs?: number | null;
+  /** The run that produced this message, and the queries it actually ran. */
+  runId?: string | null;
+  /**
+   * Present when the live stream handed the whole run over on `run.completed`.
+   * Absent after a reload, where `runId` is followed instead — the run record
+   * is the durable copy of the trace.
+   */
+  steps?: { label: string; status: string; query_id?: string | null }[];
 };
 
 type ChatState = {
@@ -123,6 +131,7 @@ function fromMessageDoc(doc: {
   content: string;
   usage?: { input_tokens: number; output_tokens: number } | null;
   duration_ms?: number | null;
+  run_id?: string | null;
 }): StoreMessage {
   return {
     id: doc.id,
@@ -130,6 +139,7 @@ function fromMessageDoc(doc: {
     content: doc.content,
     usage: doc.usage ?? null,
     durationMs: doc.duration_ms ?? null,
+    runId: doc.run_id ?? null,
   };
 }
 

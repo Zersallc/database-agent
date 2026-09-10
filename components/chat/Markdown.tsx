@@ -7,6 +7,7 @@ import { TableBlock } from "./blocks/TableBlock";
 import type { AgentStep } from "./blocks/AgentStatusBlock";
 import type { DiffPayload } from "./blocks/DiffBlock";
 import type { FilePayload } from "./blocks/FileBlock";
+import { resultSignature } from "./blocks/sql/executed";
 
 const ChartBlock = dynamic(
   () => import("./blocks/ChartBlock").then((m) => m.ChartBlock),
@@ -52,6 +53,7 @@ function safeParseJSON<T>(text: string): T | null {
 export function Markdown({
   content,
   autoRun = false,
+  renderedResults,
 }: {
   content: string;
   /**
@@ -62,6 +64,17 @@ export function Markdown({
    * queries at the customer's database at once, past the 60/minute limit.
    */
   autoRun?: boolean;
+  /**
+   * Fingerprints of the result sets this message already shows, from the
+   * queries it ran. A table matching one of them is the model copying out a
+   * table the reader is looking at, and is dropped.
+   *
+   * The prompt asks it not to, and the prompt is not enough on its own: a
+   * worked example in a format spec outweighs a prose instruction beside it,
+   * which is the whole reason the ```sql decoy existed. This is the half that
+   * does not depend on the model agreeing.
+   */
+  renderedResults?: Set<string>;
 }) {
   return (
     <div className="prose prose-sm prose-zinc max-w-none dark:prose-invert prose-p:my-2 prose-headings:my-3">
@@ -106,16 +119,20 @@ export function Markdown({
               );
             }
 
-            if (lang === "table") {
+            if (lang === "table" || lang === "json") {
               const data = safeParseJSON<{
                 columns: string[];
                 rows: never[][];
               }>(raw);
-              return data ? (
-                <TableBlock columns={data.columns} rows={data.rows} />
-              ) : (
-                <CodeBlock code={raw} language="json" />
-              );
+              if (!Array.isArray(data?.columns) || !Array.isArray(data?.rows)) {
+                // `json` is not a table block; anything else tagged that way
+                // renders as plain code, exactly as it did before.
+                return <CodeBlock code={raw} language="json" />;
+              }
+              if (renderedResults?.has(resultSignature(data.columns, data.rows))) {
+                return null;
+              }
+              return <TableBlock columns={data.columns} rows={data.rows} />;
             }
 
             if (lang === "flow") {

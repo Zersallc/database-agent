@@ -124,6 +124,10 @@ export function ChatWorkspace() {
             streaming: false,
             usage: payload.run.usage,
             durationMs: payload.run.duration_ms,
+            // Carried straight from the stream so the executed queries can be
+            // rendered without fetching a run that just arrived.
+            runId: payload.run.id,
+            steps: payload.run.steps,
           });
         } else if (event === "run.failed") {
           updateLocalMessage(conversationId, assistantMessageId, {
