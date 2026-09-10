@@ -140,7 +140,7 @@ export function buildSystemPrompt(input: PromptInput): string {
 
   if (input.playbookContext.trim()) {
     sections.push(
-      `## Workspace playbook\n\nThis is how this organization defines its terms. It overrides your general assumptions.\n\n${input.playbookContext.trim()}`
+      `## Workspace playbook\n\nThis is how this organization defines its terms, and it overrides your general assumptions about what those terms mean. It does not override the schema about what exists.\n\nIf the playbook refers to a table or column that is not in the schema below, the schema is the authority: say the data is not available on this connection. Do not answer from a different column that looks close.\n\n${input.playbookContext.trim()}`
     );
   }
 
