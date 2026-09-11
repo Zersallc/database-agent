@@ -1,12 +1,14 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
-import { Building2Icon, DatabaseIcon, PencilIcon, PlusIcon, Trash2Icon } from "lucide-react";
+import { Building2Icon, DatabaseIcon, PencilIcon, PlusIcon, Trash2Icon, UploadIcon } from "lucide-react";
 import { DataAccessDialog } from "./DataAccessDialog";
 import type { ExportableColumnDef } from "@/components/shared/DataTable";
 import { DataTable } from "@/components/shared/DataTable";
 import { FilterBar, useFilteredData, type FilterConfig } from "@/components/shared/FilterBar";
+import { readLogoFile } from "@/lib/report-settings-client";
+import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
@@ -36,6 +38,7 @@ type CompanyRow = {
   name: string;
   country: string | null;
   isActive: boolean;
+  logoDataUrl: string | null;
   userCount: number;
   createdAt: string;
   updatedAt: string;
@@ -45,9 +48,22 @@ type FormState = {
   name: string;
   country: string;
   isActive: boolean;
+  logoBase64: string | null;
+  logoMimeType: string | null;
+  removeLogo: boolean;
 };
 
-const EMPTY_FORM: FormState = { name: "", country: "", isActive: true };
+const EMPTY_FORM: FormState = {
+  name: "",
+  country: "",
+  isActive: true,
+  logoBase64: null,
+  logoMimeType: null,
+  removeLogo: false,
+};
+
+const LOGO_ACCEPTED_TYPES = ["image/png", "image/jpeg"];
+const LOGO_MAX_BYTES = 1024 * 1024;
 
 const FILTER_CONFIG: FilterConfig<CompanyRow>[] = [
   { column: "status", label: "Status", type: "enum", getValue: (row) => (row.isActive ? "Active" : "Inactive") },
@@ -66,6 +82,7 @@ export function CompaniesPage() {
 
   const [deleteTarget, setDeleteTarget] = useState<CompanyRow | null>(null);
   const [dataAccessTarget, setDataAccessTarget] = useState<CompanyRow | null>(null);
+  const logoInputRef = useRef<HTMLInputElement>(null);
 
   const filters = useFilteredData(companies, FILTER_CONFIG);
 
@@ -92,9 +109,30 @@ export function CompaniesPage() {
 
   function openEdit(company: CompanyRow) {
     setEditing(company);
-    setForm({ name: company.name, country: company.country ?? "", isActive: company.isActive });
+    setForm({
+      name: company.name,
+      country: company.country ?? "",
+      isActive: company.isActive,
+      logoBase64: null,
+      logoMimeType: null,
+      removeLogo: false,
+    });
     setFormError(null);
     setDialogOpen(true);
+  }
+
+  async function handleLogoFile(file: File) {
+    setFormError(null);
+    if (!LOGO_ACCEPTED_TYPES.includes(file.type)) {
+      setFormError("Only PNG or JPG images are supported.");
+      return;
+    }
+    if (file.size > LOGO_MAX_BYTES) {
+      setFormError(`That image is ${(file.size / 1024).toFixed(0)} KB; the limit is 1024 KB.`);
+      return;
+    }
+    const { base64, mimeType } = await readLogoFile(file);
+    setForm((prev) => ({ ...prev, logoBase64: base64, logoMimeType: mimeType, removeLogo: false }));
   }
 
   async function handleSubmit() {
@@ -107,7 +145,13 @@ export function CompaniesPage() {
     const res = await fetch(url, {
       method,
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ name: form.name, country: form.country || null, isActive: form.isActive }),
+      body: JSON.stringify({
+        name: form.name,
+        country: form.country || null,
+        isActive: form.isActive,
+        ...(form.logoBase64 ? { logo_base64: form.logoBase64, logo_mime_type: form.logoMimeType } : {}),
+        ...(form.removeLogo ? { remove_logo: true } : {}),
+      }),
     });
     setSaving(false);
 
@@ -142,6 +186,17 @@ export function CompaniesPage() {
   }
 
   const columns: ExportableColumnDef<CompanyRow>[] = [
+    {
+      id: "logo",
+      header: "",
+      enableSorting: false,
+      cell: ({ row }) => (
+        <Avatar size="sm">
+          {row.original.logoDataUrl && <AvatarImage src={row.original.logoDataUrl} alt="" />}
+          <AvatarFallback>{row.original.name.slice(0, 2).toUpperCase()}</AvatarFallback>
+        </Avatar>
+      ),
+    },
     {
       accessorKey: "name",
       header: "Name",
@@ -250,6 +305,45 @@ export function CompaniesPage() {
             <div className="space-y-1.5">
               <Label htmlFor="company-country">Country</Label>
               <Input id="company-country" value={form.country} onChange={(e) => setForm({ ...form, country: e.target.value })} placeholder="Optional" />
+            </div>
+
+            <div className="space-y-1.5">
+              <Label>Logo</Label>
+              <div className="flex items-center gap-3">
+                <Avatar>
+                  {form.logoBase64 && form.logoMimeType ? (
+                    <AvatarImage src={`data:${form.logoMimeType};base64,${form.logoBase64}`} alt="" />
+                  ) : editing?.logoDataUrl && !form.removeLogo ? (
+                    <AvatarImage src={editing.logoDataUrl} alt="" />
+                  ) : null}
+                  <AvatarFallback>{(form.name || "?").slice(0, 2).toUpperCase()}</AvatarFallback>
+                </Avatar>
+                <input
+                  ref={logoInputRef}
+                  type="file"
+                  accept={LOGO_ACCEPTED_TYPES.join(",")}
+                  className="hidden"
+                  onChange={(e) => {
+                    const file = e.target.files?.[0];
+                    if (file) void handleLogoFile(file);
+                  }}
+                />
+                <Button size="sm" variant="outline" onClick={() => logoInputRef.current?.click()}>
+                  <UploadIcon className="size-3.5" />
+                  Upload
+                </Button>
+                {((editing?.logoDataUrl && !form.removeLogo) || form.logoBase64) && (
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    onClick={() => setForm({ ...form, logoBase64: null, logoMimeType: null, removeLogo: true })}
+                  >
+                    <Trash2Icon className="size-3.5" />
+                    Remove
+                  </Button>
+                )}
+              </div>
+              <p className="text-xs text-muted-foreground">PNG or JPG, up to 1 MB.</p>
             </div>
 
             <div className="flex items-center justify-between rounded-lg border border-border px-3 py-2">

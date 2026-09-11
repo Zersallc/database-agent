@@ -2,26 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/db";
 import { requireAdminSession } from "@/lib/require-admin";
 import { recordAuditEvent } from "@/lib/services/audit";
-
-function serializeCompany(company: {
-  id: string;
-  name: string;
-  country: string | null;
-  isActive: boolean;
-  createdAt: Date;
-  updatedAt: Date;
-  _count: { users: number };
-}) {
-  return {
-    id: company.id,
-    name: company.name,
-    country: company.country,
-    isActive: company.isActive,
-    userCount: company._count.users,
-    createdAt: company.createdAt,
-    updatedAt: company.updatedAt,
-  };
-}
+import { serializeCompany, validateLogoInput } from "@/lib/services/company-logo";
 
 export async function GET() {
   const { response } = await requireAdminSession();
@@ -48,8 +29,20 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: "Company name is required." }, { status: 400 });
   }
 
+  try {
+    validateLogoInput(body?.logo_base64, body?.logo_mime_type);
+  } catch (cause) {
+    return NextResponse.json({ error: (cause as Error).message }, { status: 400 });
+  }
+
   const company = await prisma.company.create({
-    data: { name, country, isActive },
+    data: {
+      name,
+      country,
+      isActive,
+      logoBase64: typeof body?.logo_base64 === "string" ? body.logo_base64 : null,
+      logoMimeType: typeof body?.logo_mime_type === "string" ? body.logo_mime_type : null,
+    },
     include: { _count: { select: { users: true } } },
   });
 

@@ -16,13 +16,15 @@ datasource db {
 }
 
 model Company {
-  id        String   @id @default(cuid())
-  name      String
-  country   String?
-  isActive  Boolean  @default(true)
-  createdAt DateTime @default(now())
-  updatedAt DateTime @default(now()) @updatedAt
-  users     User[]
+  id           String   @id @default(cuid())
+  name         String
+  country      String?
+  isActive     Boolean  @default(true)
+  logoBase64   String?  @map("logo_base64")
+  logoMimeType String?  @map("logo_mime_type")
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @default(now()) @updatedAt
+  users        User[]
 
   @@map("companies")
 }

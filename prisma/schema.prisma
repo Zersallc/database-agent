@@ -7,13 +7,19 @@ datasource db {
 }
 
 model Company {
-  id        String   @id @default(cuid())
-  name      String
-  country   String?
-  isActive  Boolean  @default(true)
-  createdAt DateTime @default(now())
-  updatedAt DateTime @default(now()) @updatedAt
-  users     User[]
+  id           String   @id @default(cuid())
+  name         String
+  country      String?
+  isActive     Boolean  @default(true)
+  /// Small brand mark shown in the Companies admin table, same convention as
+  /// report branding (lib/services/report-settings.ts): base64, not a blob
+  /// store URL, since logos are small and this app has no persistent blob
+  /// store configured.
+  logoBase64   String?  @map("logo_base64")
+  logoMimeType String?  @map("logo_mime_type")
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @default(now()) @updatedAt
+  users        User[]
 
   @@map("companies")
 }
