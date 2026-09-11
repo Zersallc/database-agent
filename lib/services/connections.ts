@@ -37,6 +37,15 @@ export type ConnectionDoc = {
   default_schema: string | null;
   /** Points at the secret store. Never leaves this module. */
   credential_handle: string | null;
+  /**
+   * Host and database name are not secrets — only the password is — so they
+   * are kept in plain text here too, duplicated out of the encrypted
+   * credentials at write time. This is what lets the UI group connections
+   * from different companies that point at the same physical database
+   * without ever reading a password back out of the secret store.
+   */
+  host: string | null;
+  database: string | null;
   created_at: string;
   updated_at: string;
 };
@@ -54,6 +63,8 @@ export function serializeConnection(doc: ConnectionDoc) {
     allow_writes: doc.allow_writes,
     max_rows: doc.max_rows,
     default_schema: doc.default_schema,
+    host: doc.host,
+    database: doc.database,
     created_at: doc.created_at,
     updated_at: doc.updated_at,
   };
@@ -134,6 +145,8 @@ export async function createConnection(
     max_rows: input.max_rows,
     default_schema: input.default_schema ?? null,
     credential_handle: hasCredentials ? credentialHandle(id) : null,
+    host: input.credentials?.host ?? null,
+    database: input.credentials?.database ?? null,
     created_at: now,
     updated_at: now,
   };
@@ -166,6 +179,8 @@ export async function updateConnection(
     const handle = credentialHandle(connectionId);
     await stores().secrets.write(handle, JSON.stringify(input.credentials));
     changes.credential_handle = handle;
+    changes.host = input.credentials.host ?? null;
+    changes.database = input.credentials.database ?? null;
     // Credentials changed, so the recorded status is about the old ones.
     changes.status = "unknown";
     changes.status_checked_at = null;
@@ -192,21 +207,24 @@ export async function deleteConnection(tenantId: string, connectionId: string): 
   await stores().documents.delete("connections", tenantId, connectionId);
 }
 
-/** Reads credentials and assembles connector options. The only path to a secret. */
-export async function connectorOptions(doc: ConnectionDoc): Promise<ConnectorOptions> {
-  let credentials: Credentials = {};
-  if (doc.credential_handle) {
-    const raw = await stores().secrets.read(doc.credential_handle);
-    if (raw) {
-      try {
-        credentials = JSON.parse(raw) as Credentials;
-      } catch {
-        // A corrupt secret is not a caller error and its contents must not be
-        // echoed. Fall through to empty credentials; the connector will fail
-        // with a connection error the operator can act on.
-      }
-    }
+/** Reads a connection's raw credentials. One of two paths to a secret (see connectorOptions). */
+export async function readCredentials(doc: ConnectionDoc): Promise<Credentials> {
+  if (!doc.credential_handle) return {};
+  const raw = await stores().secrets.read(doc.credential_handle);
+  if (!raw) return {};
+  try {
+    return JSON.parse(raw) as Credentials;
+  } catch {
+    // A corrupt secret is not a caller error and its contents must not be
+    // echoed. Fall through to empty credentials; the connector will fail
+    // with a connection error the operator can act on.
+    return {};
   }
+}
+
+/** Reads credentials and assembles connector options. The other path to a secret. */
+export async function connectorOptions(doc: ConnectionDoc): Promise<ConnectorOptions> {
+  const credentials = await readCredentials(doc);
   return {
     credentials,
     maxRows: doc.max_rows,
