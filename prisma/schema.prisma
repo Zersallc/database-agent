@@ -159,3 +159,54 @@ model AppSecret {
 
   @@map("app_secrets")
 }
+
+/// One-time snapshot mirror of the "Observations DB" tab in the INTAJ - QHSE
+/// Observation Google Sheet — a field HSE (health & safety) observation log,
+/// unrelated to Medi-Merchant. Column names match the Sheet exactly, same
+/// convention as Inventory/Hospitals. The "Report" column here is a plain
+/// text field from that sheet and has no relation to this database's own
+/// externally-owned `Report` table (Medi-Merchant asset lifecycle) — column
+/// names are scoped per table, so there is no collision. Not yet populated;
+/// this only creates the structure.
+model ObservationsDb {
+  id                               String    @id @map("ID")
+  timestamp                        DateTime? @map("Timestamp")
+  createdBy                        String?   @map("Created by")
+  lastEditedDateTime               DateTime? @map("Last Edited DateTime")
+  lastEditedBy                     String?   @map("Last Edited by")
+  counter                          Float?    @map("Counter")
+  page1Header                      String?   @map("Page 1 Header")
+  employeeName                     String?   @map("Employee Name")
+  date                             DateTime? @map("Date")
+  location1                        String?   @map("Location1")
+  location2                        String?   @map("Location2")
+  unit                             String?   @map("Unit")
+  category                         String?   @map("Category")
+  hseObservationClassification     String?   @map("HSE Observation Classification")
+  hseObservationSubClassification  String?   @map("HSE Observation SubClassification")
+  howToReport                      String?   @map("How to Report?")
+  observationOrFinding             String?   @map("Observation or Finding")
+  takeAudioOrVideo                 String?   @map("Take Audio or Video")
+  observationPhoto1                String?   @map("Observation Photo1")
+  otherPhotoYN                     String?   @map("Other Photo Y/N")
+  observationPhoto2                String?   @map("Observation Photo2")
+  actionOrSuggestion               String?   @map("Action or Suggestion ")
+  departmentResponsible             String?   @map("Department Responsible")
+  status                           String?   @map("Status")
+  commentOnHowYouClosedIt          String?   @map("Comment on how you closed it?")
+  attachActionPictureIfApplicable  String?   @map("Attach Action Picture if applicable?")
+  closerDateTime                   DateTime? @map("Closer DateTime")
+  page2Header                      String?   @map("Page 2 Header")
+  followUpByManagement             String?   @map("Follow up by Management")
+  responsible                      String?   @map("Responsible")
+  userInstructions                 String?   @map("User Instructions")
+  snapshot                         String?   @map("Snapshot")
+  report                           String?   @map("Report")
+  certificate                      String?   @map("Certificate")
+  whatsapp                         String?   @map("WhatsApp")
+  phoneNumber                      String?   @map("Phone Number")
+  name                             String?   @map("Name")
+  messageId                        String?   @map("Message ID")
+
+  @@map("Observations DB")
+}
