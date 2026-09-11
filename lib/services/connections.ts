@@ -38,14 +38,17 @@ export type ConnectionDoc = {
   /** Points at the secret store. Never leaves this module. */
   credential_handle: string | null;
   /**
-   * Host and database name are not secrets — only the password is — so they
-   * are kept in plain text here too, duplicated out of the encrypted
-   * credentials at write time. This is what lets the UI group connections
-   * from different companies that point at the same physical database
-   * without ever reading a password back out of the secret store.
+   * Host, port, database name and username are not secrets — only the
+   * password is — so they are kept in plain text here too, duplicated out of
+   * the encrypted credentials at write time. This is what lets the UI group
+   * connections from different companies that point at the same physical
+   * database, and show/edit a connection's settings, without ever reading a
+   * password back out of the secret store.
    */
   host: string | null;
+  port: number | null;
   database: string | null;
+  username: string | null;
   created_at: string;
   updated_at: string;
 };
@@ -64,7 +67,9 @@ export function serializeConnection(doc: ConnectionDoc) {
     max_rows: doc.max_rows,
     default_schema: doc.default_schema,
     host: doc.host,
+    port: doc.port,
     database: doc.database,
+    username: doc.username,
     created_at: doc.created_at,
     updated_at: doc.updated_at,
   };
@@ -146,7 +151,9 @@ export async function createConnection(
     default_schema: input.default_schema ?? null,
     credential_handle: hasCredentials ? credentialHandle(id) : null,
     host: input.credentials?.host ?? null,
+    port: input.credentials?.port ?? null,
     database: input.credentials?.database ?? null,
+    username: input.credentials?.username ?? null,
     created_at: now,
     updated_at: now,
   };
@@ -180,7 +187,9 @@ export async function updateConnection(
     await stores().secrets.write(handle, JSON.stringify(input.credentials));
     changes.credential_handle = handle;
     changes.host = input.credentials.host ?? null;
+    changes.port = input.credentials.port ?? null;
     changes.database = input.credentials.database ?? null;
+    changes.username = input.credentials.username ?? null;
     // Credentials changed, so the recorded status is about the old ones.
     changes.status = "unknown";
     changes.status_checked_at = null;
