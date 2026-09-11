@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import bcrypt from "bcryptjs";
 import { prisma } from "@/lib/db";
 import { requireAdminSession } from "@/lib/require-admin";
+import { isValidRole } from "@/lib/roles";
 import { recordAuditEvent } from "@/lib/services/audit";
 
 function serializeUser(user: {
@@ -48,7 +49,7 @@ export async function POST(req: NextRequest) {
   const email = typeof body?.email === "string" ? body.email.trim().toLowerCase() : "";
   const password = typeof body?.password === "string" ? body.password : "";
   const name = typeof body?.name === "string" ? body.name.trim() || null : null;
-  const role = body?.role === "Admin" ? "Admin" : body?.role === "Viewer" ? "Viewer" : "User";
+  const role = isValidRole(body?.role) ? body.role : "User";
   const companyId = typeof body?.companyId === "string" && body.companyId ? body.companyId : null;
   const isActive = body?.isActive !== false;
 

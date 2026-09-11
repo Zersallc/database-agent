@@ -7,6 +7,7 @@ import type { ExportableColumnDef } from "@/components/shared/DataTable";
 import { DataTable } from "@/components/shared/DataTable";
 import { FilterBar, useFilteredData, type FilterConfig } from "@/components/shared/FilterBar";
 import { ImportDialog, type ImportResult } from "@/components/shared/ImportDialog";
+import { isAdminRole, isValidRole } from "@/lib/roles";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -204,7 +205,7 @@ export function UsersPage() {
       const company = row["Company"]?.trim();
       const companyId = company ? companies.find((c) => c.name.toLowerCase() === company.toLowerCase())?.id ?? null : null;
       const rawRole = row["Role"]?.trim();
-      const role = rawRole === "Admin" ? "Admin" : rawRole === "Viewer" ? "Viewer" : "User";
+      const role = isValidRole(rawRole) ? rawRole : "User";
       const existing = users.find((u) => u.email.toLowerCase() === email);
 
       const payload = {
@@ -261,7 +262,7 @@ export function UsersPage() {
       accessorKey: "role",
       header: "Role",
       meta: { exportHeader: "Role", exportValue: (row) => row.role },
-      cell: ({ row }) => <Badge variant={row.original.role === "Admin" ? "default" : "outline"}>{row.original.role}</Badge>,
+      cell: ({ row }) => <Badge variant={isAdminRole(row.original.role) ? "default" : "outline"}>{row.original.role}</Badge>,
     },
     {
       accessorKey: "companyName",
@@ -385,7 +386,7 @@ export function UsersPage() {
               <div className="space-y-1.5">
                 <Label>Role</Label>
                 <Select
-                  items={{ User: "User", Admin: "Admin", Viewer: "Viewer" }}
+                  items={{ User: "User", Admin: "Admin", Developer: "Developer", Viewer: "Viewer" }}
                   value={form.role}
                   onValueChange={(value) => setForm({ ...form, role: value as string })}
                 >
@@ -395,6 +396,7 @@ export function UsersPage() {
                   <SelectContent>
                     <SelectItem value="User">User</SelectItem>
                     <SelectItem value="Admin">Admin</SelectItem>
+                    <SelectItem value="Developer">Developer</SelectItem>
                     <SelectItem value="Viewer">Viewer</SelectItem>
                   </SelectContent>
                 </Select>
@@ -464,7 +466,7 @@ export function UsersPage() {
         requiredColumns={["Name", "Email"]}
         notes={[
           "Existing users are matched by Email and updated; new emails create a new user.",
-          "Role must be exactly 'Admin', 'User', or 'Viewer' (default: User).",
+          "Role must be exactly 'Admin', 'Developer', 'User', or 'Viewer' (default: User).",
           "Company must match an existing company name exactly, or leave blank.",
           "Leave Password blank on new rows to generate a random one — reset it manually after import.",
         ]}

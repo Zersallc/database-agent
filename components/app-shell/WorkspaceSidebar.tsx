@@ -35,6 +35,8 @@ import { Button } from "@/components/ui/button";
 import { ThemeToggle } from "@/components/theme/ThemeToggle";
 import { useWorkspace } from "@/lib/chat-store";
 import { useProfile } from "@/lib/profile";
+import { isAdminRole } from "@/lib/roles";
+import { CompanySwitcher } from "./CompanySwitcher";
 import { ConnectionSwitcher } from "./ConnectionSwitcher";
 
 const NAV = [
@@ -58,7 +60,8 @@ export function WorkspaceSidebar() {
     deleteConversation,
   } = useWorkspace();
 
-  const isAdmin = session?.user?.role === "Admin";
+  const isAdmin = isAdminRole(session?.user?.role);
+  const isDeveloper = session?.user?.role === "Developer";
   const onChat = pathname === "/";
   const nav = NAV.filter((item) => !item.adminOnly || isAdmin);
 
@@ -70,6 +73,7 @@ export function WorkspaceSidebar() {
   return (
     <Sidebar collapsible="icon">
       <SidebarHeader>
+        {isDeveloper && <CompanySwitcher currentCompanyId={session?.user?.companyId ?? null} />}
         <ConnectionSwitcher />
       </SidebarHeader>
 

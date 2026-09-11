@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { auth } from "@/lib/auth";
+import { isAdminRole } from "@/lib/roles";
 
 /**
  * Session + role check shared by the Users/Companies admin routes. Distinct
@@ -12,7 +13,7 @@ export async function requireAdminSession() {
   if (!session?.user?.id) {
     return { session: null, response: NextResponse.json({ error: "Unauthorized" }, { status: 401 }) };
   }
-  if (session.user.role !== "Admin") {
+  if (!isAdminRole(session.user.role)) {
     return {
       session: null,
       response: NextResponse.json({ error: "Admin role required" }, { status: 403 }),

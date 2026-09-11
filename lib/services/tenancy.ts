@@ -171,7 +171,8 @@ export async function sessionPrincipal(
     await ensureLocalTenant();
   }
 
-  const role: Role = dbRole === "Admin" ? "admin" : dbRole === "Viewer" ? "viewer" : "member";
+  const role: Role =
+    dbRole === "Admin" || dbRole === "Developer" ? "admin" : dbRole === "Viewer" ? "viewer" : "member";
   return {
     tenantId,
     userId,

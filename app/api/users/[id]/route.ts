@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import bcrypt from "bcryptjs";
 import { prisma } from "@/lib/db";
 import { requireAdminSession } from "@/lib/require-admin";
+import { isValidRole } from "@/lib/roles";
 import { diffFields, recordAuditEvent } from "@/lib/services/audit";
 
 function serializeUser(user: {
@@ -63,7 +64,7 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
     }
   }
   if (typeof body.name === "string") data.name = body.name.trim() || null;
-  if (body.role === "Admin" || body.role === "User" || body.role === "Viewer") data.role = body.role;
+  if (isValidRole(body.role)) data.role = body.role;
   if (typeof body.companyId === "string" || body.companyId === null) {
     data.companyId = body.companyId || null;
   }

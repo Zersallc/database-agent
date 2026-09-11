@@ -3,6 +3,7 @@
 import { useSession } from "next-auth/react";
 import { PageHeader } from "@/components/app-shell/PageHeader";
 import { Card, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { isAdminRole } from "@/lib/roles";
 import { useSettings } from "@/lib/settings-store";
 import { ModelProviderSection } from "./ModelProviderSection";
 import { ReportBrandingSection } from "./ReportBrandingSection";
@@ -16,7 +17,7 @@ import {
 export function SettingsPage() {
   const settings = useSettings();
   const { data: session } = useSession();
-  const isAdmin = session?.user?.role === "Admin";
+  const isAdmin = isAdminRole(session?.user?.role);
 
   return (
     <div className="flex h-svh flex-col">
