@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
-import { DatabaseIcon, PencilIcon, PlusIcon, Trash2Icon, ZapIcon } from "lucide-react";
+import { DatabaseIcon, PencilIcon, PlusIcon, RefreshCwIcon, Trash2Icon, ZapIcon } from "lucide-react";
 import { DataAccessDialog } from "@/components/companies/DataAccessDialog";
 import type { ExportableColumnDef } from "@/components/shared/DataTable";
 import { DataTable } from "@/components/shared/DataTable";
@@ -37,8 +37,15 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 
-const MANAGED_CONNECTION_NAME = "Company data access (managed)";
+type SchemaColumn = {
+  name: string;
+  data_type: string;
+  nullable: boolean;
+  primary_key: boolean;
+  description: string | null;
+};
 
 type MappingConnection = {
   id: string;
@@ -49,16 +56,20 @@ type MappingConnection = {
   port: number | null;
   database: string | null;
   username: string | null;
-  /** null for the managed connection (its tables come from granted_tables instead). */
-  tables: string[] | null;
 };
 
-type MappingCompany = {
+type ApiRow = {
   company_id: string;
   company_name: string;
-  connections: MappingConnection[];
-  granted_tables: string[];
+  connection: MappingConnection;
+  is_managed: boolean;
+  table_name: string;
+  columns: SchemaColumn[] | null;
 };
+
+type Row = ApiRow & { groupKey: string; groupLabel: string };
+
+type Company = { id: string; name: string };
 
 type AuditEvent = {
   id: string;
@@ -69,16 +80,6 @@ type AuditEvent = {
   company_id: string | null;
   metadata: Record<string, unknown> | null;
   created_at: string;
-};
-
-type Row = {
-  companyId: string;
-  companyName: string;
-  connection: MappingConnection;
-  isManaged: boolean;
-  grantedTables: string[] | null;
-  groupKey: string;
-  groupLabel: string;
 };
 
 const ENGINES = [
@@ -106,25 +107,19 @@ function groupKeyFor(connection: MappingConnection): string {
   return `${connection.engine}::${connection.host ?? ""}::${connection.database ?? connection.id}`;
 }
 
-function buildRows(companies: MappingCompany[]): Row[] {
-  const rows: Row[] = [];
-  for (const company of companies) {
-    for (const connection of company.connections) {
-      const isManaged = connection.name === MANAGED_CONNECTION_NAME;
-      rows.push({
-        companyId: company.company_id,
-        companyName: company.company_name,
-        connection,
-        isManaged,
-        grantedTables: isManaged ? company.granted_tables : connection.tables,
-        groupKey: groupKeyFor(connection),
-        groupLabel: connection.database || connection.name,
-      });
-    }
-  }
-  return rows.sort(
-    (a, b) => a.groupLabel.localeCompare(b.groupLabel) || a.companyName.localeCompare(b.companyName)
-  );
+function buildRows(apiRows: ApiRow[]): Row[] {
+  return apiRows
+    .map((row) => ({
+      ...row,
+      groupKey: groupKeyFor(row.connection),
+      groupLabel: row.connection.database || row.connection.name,
+    }))
+    .sort(
+      (a, b) =>
+        a.groupLabel.localeCompare(b.groupLabel) ||
+        a.company_name.localeCompare(b.company_name) ||
+        a.table_name.localeCompare(b.table_name)
+    );
 }
 
 function describeEvent(event: AuditEvent, companyNameById: Map<string, string>): string {
@@ -166,7 +161,7 @@ function describeEvent(event: AuditEvent, companyNameById: Map<string, string>):
 const FILTER_CONFIG: FilterConfig<Row>[] = [
   { column: "database", label: "Database", type: "enum", getValue: (row) => row.groupLabel },
   { column: "engine", label: "Engine", type: "enum", getValue: (row) => row.connection.engine },
-  { column: "company", label: "Company", type: "enum", getValue: (row) => row.companyName },
+  { column: "company", label: "Company", type: "enum", getValue: (row) => row.company_name },
   { column: "status", label: "Status", type: "enum", getValue: (row) => row.connection.status },
 ];
 
@@ -180,10 +175,11 @@ function formatTimestamp(iso: string): string {
 }
 
 export function DatabaseMappingPage() {
-  const [companies, setCompanies] = useState<MappingCompany[]>([]);
+  const [apiRows, setApiRows] = useState<ApiRow[]>([]);
+  const [companies, setCompanies] = useState<Company[]>([]);
   const [events, setEvents] = useState<AuditEvent[]>([]);
   const [loading, setLoading] = useState(true);
-  const [testingId, setTestingId] = useState<string | null>(null);
+  const [busyConnectionId, setBusyConnectionId] = useState<string | null>(null);
 
   const [dataAccessTarget, setDataAccessTarget] = useState<{ companyId: string; companyName: string } | null>(
     null
@@ -203,6 +199,8 @@ export function DatabaseMappingPage() {
   const [assignCompanyId, setAssignCompanyId] = useState("");
   const [assigning, setAssigning] = useState(false);
 
+  const [columnsTarget, setColumnsTarget] = useState<Row | null>(null);
+
   const [deleteTarget, setDeleteTarget] = useState<{ companyId: string; connection: MappingConnection } | null>(
     null
   );
@@ -210,12 +208,15 @@ export function DatabaseMappingPage() {
   const load = useCallback(async () => {
     setLoading(true);
     try {
-      const [mappingRes, eventsRes] = await Promise.all([
+      const [mappingRes, companiesRes, eventsRes] = await Promise.all([
         fetch("/api/database-mapping"),
+        fetch("/api/companies"),
         fetch("/api/audit-events?limit=30"),
       ]);
       const mappingBody = await mappingRes.json();
-      setCompanies(mappingBody.companies ?? []);
+      setApiRows(mappingBody.rows ?? []);
+      const companiesBody = await companiesRes.json().catch(() => ({}));
+      setCompanies(companiesBody.companies ?? []);
       const eventsBody = await eventsRes.json().catch(() => ({}));
       setEvents(eventsBody.events ?? []);
     } catch (cause) {
@@ -229,12 +230,8 @@ export function DatabaseMappingPage() {
     load();
   }, [load]);
 
-  const rows = useMemo(() => buildRows(companies), [companies]);
-  const filters = useFilteredData(rows, FILTER_CONFIG);
-  const companyNameById = useMemo(
-    () => new Map(companies.map((c) => [c.company_id, c.company_name])),
-    [companies]
-  );
+  const rows = useMemo(() => buildRows(apiRows), [apiRows]);
+  const companyNameById = useMemo(() => new Map(companies.map((c) => [c.id, c.name])), [companies]);
 
   function openAdd() {
     setAddForm(ADD_FORM_EMPTY);
@@ -282,7 +279,7 @@ export function DatabaseMappingPage() {
   function openEdit(row: Row) {
     setEditTarget(row);
     setEditForm({
-      companyId: row.companyId,
+      companyId: row.company_id,
       name: row.connection.name,
       engine: row.connection.engine,
       host: row.connection.host ?? "",
@@ -302,7 +299,7 @@ export function DatabaseMappingPage() {
     setEditSaving(true);
     try {
       const res = await fetch(
-        `/api/companies/${editTarget.companyId}/connections/${editTarget.connection.id}`,
+        `/api/companies/${editTarget.company_id}/connections/${editTarget.connection.id}`,
         {
           method: "PATCH",
           headers: { "Content-Type": "application/json" },
@@ -337,7 +334,7 @@ export function DatabaseMappingPage() {
 
   const assignCandidates = assignTarget
     ? companies.filter(
-        (c) => !rows.some((r) => r.groupKey === assignTarget.groupKey && r.companyId === c.company_id)
+        (c) => !rows.some((r) => r.groupKey === assignTarget.groupKey && r.company_id === c.id)
       )
     : [];
 
@@ -346,7 +343,7 @@ export function DatabaseMappingPage() {
     setAssigning(true);
     try {
       const res = await fetch(
-        `/api/companies/${assignTarget.companyId}/connections/${assignTarget.connection.id}/assign`,
+        `/api/companies/${assignTarget.company_id}/connections/${assignTarget.connection.id}/assign`,
         {
           method: "POST",
           headers: { "Content-Type": "application/json" },
@@ -368,7 +365,7 @@ export function DatabaseMappingPage() {
   }
 
   async function testConnection(companyId: string, connectionId: string) {
-    setTestingId(connectionId);
+    setBusyConnectionId(connectionId);
     try {
       const res = await fetch(`/api/companies/${companyId}/connections/${connectionId}/test`, {
         method: "POST",
@@ -384,7 +381,24 @@ export function DatabaseMappingPage() {
     } catch (cause) {
       toast.error(describeError(cause));
     } finally {
-      setTestingId(null);
+      setBusyConnectionId(null);
+    }
+  }
+
+  async function refreshTables(companyId: string, connectionId: string) {
+    setBusyConnectionId(connectionId);
+    try {
+      const res = await fetch(`/api/companies/${companyId}/connections/${connectionId}/register-tables`, {
+        method: "POST",
+      });
+      const body = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(body.error ?? "Couldn't read this connection's tables.");
+      toast.success(`${body.tables?.length ?? 0} table(s) registered.`);
+      load();
+    } catch (cause) {
+      toast.error(describeError(cause));
+    } finally {
+      setBusyConnectionId(null);
     }
   }
 
@@ -430,37 +444,34 @@ export function DatabaseMappingPage() {
       },
     },
     {
-      accessorKey: "companyName",
-      header: "Company",
-      meta: { exportHeader: "Company", exportValue: (row) => row.companyName },
-      cell: ({ row }) => <span className="font-medium">{row.original.companyName}</span>,
+      id: "table",
+      accessorFn: (row) => row.table_name,
+      header: "Table",
+      cell: ({ row }) =>
+        row.original.table_name ? (
+          <span className="font-mono text-xs">{row.original.table_name}</span>
+        ) : (
+          <span className="text-xs text-muted-foreground">No tables registered yet</span>
+        ),
     },
     {
-      id: "tables",
-      accessorFn: (row) => (row.grantedTables ?? []).join(", "),
-      header: "Tables",
-      enableSorting: false,
-      meta: {
-        exportHeader: "Tables",
-        exportValue: (row) => (row.grantedTables ?? []).join(", "),
-      },
+      accessorKey: "company_name",
+      header: "Company",
+      meta: { exportHeader: "Company", exportValue: (row) => row.company_name },
+      cell: ({ row }) => <span className="font-medium">{row.original.company_name}</span>,
+    },
+    {
+      id: "columns",
+      accessorFn: (row) => row.columns?.length ?? 0,
+      header: "Columns",
       cell: ({ row }) => {
-        const tables = row.original.grantedTables ?? [];
-        if (tables.length === 0) {
-          return (
-            <span className="text-xs text-muted-foreground">
-              {row.original.isManaged ? "No tables granted" : "No tables found"}
-            </span>
-          );
-        }
+        const r = row.original;
+        if (r.is_managed) return <span className="text-xs text-muted-foreground">Grant-based</span>;
+        if (!r.columns) return <span className="text-xs text-muted-foreground">—</span>;
         return (
-          <div className="flex max-w-xs flex-wrap gap-1">
-            {tables.map((t) => (
-              <Badge key={t} variant="outline" className="font-mono text-[10px]">
-                {t}
-              </Badge>
-            ))}
-          </div>
+          <Button variant="outline" size="sm" onClick={() => setColumnsTarget(r)}>
+            {r.columns.length} column{r.columns.length === 1 ? "" : "s"}
+          </Button>
         );
       },
     },
@@ -480,16 +491,27 @@ export function DatabaseMappingPage() {
       enableSorting: false,
       cell: ({ row }) => {
         const r = row.original;
+        const busy = busyConnectionId === r.connection.id;
         return (
           <div className="flex justify-end gap-1">
-            {r.isManaged && (
+            {r.is_managed ? (
               <Button
                 variant="ghost"
                 size="icon-sm"
                 aria-label="Manage tables"
-                onClick={() => setDataAccessTarget({ companyId: r.companyId, companyName: r.companyName })}
+                onClick={() => setDataAccessTarget({ companyId: r.company_id, companyName: r.company_name })}
               >
                 <DatabaseIcon className="size-3.5" />
+              </Button>
+            ) : (
+              <Button
+                variant="ghost"
+                size="icon-sm"
+                aria-label="Refresh tables"
+                disabled={busy}
+                onClick={() => refreshTables(r.company_id, r.connection.id)}
+              >
+                <RefreshCwIcon className="size-3.5" />
               </Button>
             )}
             <Button variant="ghost" size="icon-sm" aria-label="Edit" onClick={() => openEdit(r)}>
@@ -507,8 +529,8 @@ export function DatabaseMappingPage() {
               variant="ghost"
               size="icon-sm"
               aria-label="Test connection"
-              disabled={testingId === r.connection.id}
-              onClick={() => testConnection(r.companyId, r.connection.id)}
+              disabled={busy}
+              onClick={() => testConnection(r.company_id, r.connection.id)}
             >
               <ZapIcon className="size-3.5" />
             </Button>
@@ -516,7 +538,7 @@ export function DatabaseMappingPage() {
               variant="ghost"
               size="icon-sm"
               aria-label="Remove"
-              onClick={() => setDeleteTarget({ companyId: r.companyId, connection: r.connection })}
+              onClick={() => setDeleteTarget({ companyId: r.company_id, connection: r.connection })}
             >
               <Trash2Icon className="size-3.5 text-destructive" />
             </Button>
@@ -525,6 +547,8 @@ export function DatabaseMappingPage() {
       },
     },
   ];
+
+  const filters = useFilteredData(rows, FILTER_CONFIG);
 
   return (
     <div className="space-y-4 p-6">
@@ -539,60 +563,60 @@ export function DatabaseMappingPage() {
         </Button>
       </div>
       <p className="-mt-2 text-sm text-muted-foreground">
-        Every registered database and which companies have access to each. Table access is
-        enforced by a dedicated Postgres role per company, not an app-level filter.
+        Every table in every registered database, one row each, and which company can see it.
+        Access is enforced by a dedicated Postgres role per company, not an app-level filter.
       </p>
 
       <FilterBar
-            data={rows}
-            filterConfig={FILTER_CONFIG}
-            search={filters.search}
-            onSearchChange={filters.setSearch}
-            activeFilters={filters.activeFilters}
-            onFilterChange={filters.setFilterValues}
-            onClearFilter={filters.clearFilter}
-            searchPlaceholder="Search databases…"
-          />
+        data={rows}
+        filterConfig={FILTER_CONFIG}
+        search={filters.search}
+        onSearchChange={filters.setSearch}
+        activeFilters={filters.activeFilters}
+        onFilterChange={filters.setFilterValues}
+        onClearFilter={filters.clearFilter}
+        searchPlaceholder="Search tables…"
+      />
 
-          <DataTable
-            data={filters.filtered}
-            columns={columns}
-            loading={loading}
-            getRowId={(row) => row.connection.id}
-            exportFileName="database-mapping"
-            emptyMessage="No databases registered yet."
-          />
+      <DataTable
+        data={filters.filtered}
+        columns={columns}
+        loading={loading}
+        getRowId={(row) => `${row.connection.id}::${row.table_name}`}
+        exportFileName="database-mapping"
+        emptyMessage="No databases registered yet."
+      />
 
-          {!loading && (
-            <Card>
-              <CardHeader>
-                <CardTitle>Recent activity</CardTitle>
-                <CardDescription>
-                  Who changed what, and when — connections, table access, and company/user
-                  changes across every company.
-                </CardDescription>
-              </CardHeader>
-              <CardContent>
-                {events.length === 0 ? (
-                  <p className="text-sm text-muted-foreground">No activity recorded yet.</p>
-                ) : (
-                  <ul className="space-y-2">
-                    {events.map((event) => (
-                      <li
-                        key={event.id}
-                        className="flex items-start justify-between gap-3 border-b border-border pb-2 text-sm last:border-0 last:pb-0"
-                      >
-                        <span>{describeEvent(event, companyNameById)}</span>
-                        <span className="shrink-0 text-xs text-muted-foreground">
-                          {formatTimestamp(event.created_at)}
-                        </span>
-                      </li>
-                    ))}
-                  </ul>
-                )}
-              </CardContent>
-            </Card>
-          )}
+      {!loading && (
+        <Card>
+          <CardHeader>
+            <CardTitle>Recent activity</CardTitle>
+            <CardDescription>
+              Who changed what, and when — connections, table access, and company/user changes
+              across every company.
+            </CardDescription>
+          </CardHeader>
+          <CardContent>
+            {events.length === 0 ? (
+              <p className="text-sm text-muted-foreground">No activity recorded yet.</p>
+            ) : (
+              <ul className="space-y-2">
+                {events.map((event) => (
+                  <li
+                    key={event.id}
+                    className="flex items-start justify-between gap-3 border-b border-border pb-2 text-sm last:border-0 last:pb-0"
+                  >
+                    <span>{describeEvent(event, companyNameById)}</span>
+                    <span className="shrink-0 text-xs text-muted-foreground">
+                      {formatTimestamp(event.created_at)}
+                    </span>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </CardContent>
+        </Card>
+      )}
 
       {dataAccessTarget && (
         <DataAccessDialog
@@ -614,7 +638,7 @@ export function DatabaseMappingPage() {
             <DialogTitle>Add database</DialogTitle>
             <DialogDescription>
               Register a database for a company. Credentials are encrypted at rest and never
-              shown again after saving.
+              shown again after saving — its tables are registered automatically right after.
             </DialogDescription>
           </DialogHeader>
 
@@ -624,7 +648,7 @@ export function DatabaseMappingPage() {
             <div className="grid gap-1.5">
               <Label htmlFor="db-company">Company</Label>
               <Select
-                items={Object.fromEntries(companies.map((c) => [c.company_id, c.company_name]))}
+                items={Object.fromEntries(companies.map((c) => [c.id, c.name]))}
                 value={addForm.companyId}
                 onValueChange={(value) => setAddForm({ ...addForm, companyId: value as string })}
               >
@@ -633,8 +657,8 @@ export function DatabaseMappingPage() {
                 </SelectTrigger>
                 <SelectContent>
                   {companies.map((c) => (
-                    <SelectItem key={c.company_id} value={c.company_id}>
-                      {c.company_name}
+                    <SelectItem key={c.id} value={c.id}>
+                      {c.name}
                     </SelectItem>
                   ))}
                 </SelectContent>
@@ -796,7 +820,7 @@ export function DatabaseMappingPage() {
               <p className="text-sm text-muted-foreground">Every company already has access.</p>
             ) : (
               <Select
-                items={Object.fromEntries(assignCandidates.map((c) => [c.company_id, c.company_name]))}
+                items={Object.fromEntries(assignCandidates.map((c) => [c.id, c.name]))}
                 value={assignCompanyId}
                 onValueChange={(value) => setAssignCompanyId(value as string)}
               >
@@ -805,8 +829,8 @@ export function DatabaseMappingPage() {
                 </SelectTrigger>
                 <SelectContent>
                   {assignCandidates.map((c) => (
-                    <SelectItem key={c.company_id} value={c.company_id}>
-                      {c.company_name}
+                    <SelectItem key={c.id} value={c.id}>
+                      {c.name}
                     </SelectItem>
                   ))}
                 </SelectContent>
@@ -820,6 +844,44 @@ export function DatabaseMappingPage() {
             </Button>
             <Button onClick={submitAssign} disabled={assigning || !assignCompanyId}>
               {assigning ? "Assigning…" : "Assign"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={columnsTarget !== null} onOpenChange={(open) => !open && setColumnsTarget(null)}>
+        <DialogContent className="max-w-lg">
+          <DialogHeader>
+            <DialogTitle>
+              Columns — {columnsTarget?.table_name}
+            </DialogTitle>
+            <DialogDescription>{columnsTarget?.groupLabel}</DialogDescription>
+          </DialogHeader>
+          <div className="max-h-96 overflow-y-auto rounded-lg border border-border">
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead>Column</TableHead>
+                  <TableHead>Type</TableHead>
+                  <TableHead>Nullable</TableHead>
+                  <TableHead>Key</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {(columnsTarget?.columns ?? []).map((col) => (
+                  <TableRow key={col.name}>
+                    <TableCell className="font-mono text-xs">{col.name}</TableCell>
+                    <TableCell className="font-mono text-xs text-muted-foreground">{col.data_type}</TableCell>
+                    <TableCell className="text-xs">{col.nullable ? "Yes" : "No"}</TableCell>
+                    <TableCell className="text-xs">{col.primary_key ? "PK" : ""}</TableCell>
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setColumnsTarget(null)}>
+              Close
             </Button>
           </DialogFooter>
         </DialogContent>

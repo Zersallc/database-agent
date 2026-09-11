@@ -8,6 +8,7 @@ import {
   serializeConnection,
 } from "@/lib/services/connections";
 import { recordAuditEvent } from "@/lib/services/audit";
+import { registerTablesForConnection } from "@/lib/services/registered-tables";
 
 /**
  * "Assign this same database to another company" — duplicates a connection's
@@ -60,6 +61,12 @@ export async function POST(
       assigned_from_company: sourceCompanyId,
     },
   });
+
+  try {
+    await registerTablesForConnection(targetCompanyId, created);
+  } catch {
+    // Best-effort, same as on create — Test/Refresh surfaces the problem.
+  }
 
   return NextResponse.json(serializeConnection(created), { status: 201 });
 }

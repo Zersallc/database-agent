@@ -9,6 +9,7 @@ import {
   updateConnection,
 } from "@/lib/services/connections";
 import { recordAuditEvent } from "@/lib/services/audit";
+import { deleteRegisteredTablesForConnection, registerTablesForConnection } from "@/lib/services/registered-tables";
 
 export async function PATCH(
   req: NextRequest,
@@ -61,6 +62,14 @@ export async function PATCH(
     },
   });
 
+  // Credentials may now point somewhere else entirely; re-sync the table
+  // records rather than leave the previous target's tables listed.
+  try {
+    await registerTablesForConnection(id, updated);
+  } catch {
+    // Best-effort, same as on create — Test/Refresh surfaces the problem.
+  }
+
   return NextResponse.json(serializeConnection(updated));
 }
 
@@ -79,6 +88,7 @@ export async function DELETE(
   if (!connection) return NextResponse.json({ error: "Connection not found." }, { status: 404 });
 
   await deleteConnection(id, connectionId);
+  await deleteRegisteredTablesForConnection(id, connectionId);
 
   await recordAuditEvent({
     actor: session.user,
