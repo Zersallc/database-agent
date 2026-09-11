@@ -40,6 +40,7 @@ COPY --from=builder --chown=nextjs:nodejs /app/.next/static ./.next/static
 # the Prisma CLI's transitive deps aren't isolated to node_modules/prisma+@prisma)
 COPY --from=builder --chown=nextjs:nodejs /app/prisma ./prisma
 COPY --from=builder --chown=nextjs:nodejs /app/prisma.config.ts ./prisma.config.ts
+COPY --from=builder --chown=nextjs:nodejs /app/prisma.app.config.ts ./prisma.app.config.ts
 COPY --from=deps --chown=nextjs:nodejs /app/node_modules ./node_modules
 
 COPY start.sh ./start.sh

@@ -1,0 +1,83 @@
+// The subset of prisma/schema.prisma that actually lives in the app's own
+// self-hosted database (see lib/db.ts). start.sh pushes THIS schema on boot,
+// not the full one — prisma/schema.prisma also declares Medi-Merchant's own
+// models (Hospital/Inventory/ItemSustainability/ObservationsDb), which live
+// in a different physical database (Cloud SQL, see lib/db-medimerchant.ts)
+// and must never be pushed here. Keep these five models' fields in sync with
+// their counterparts in schema.prisma by hand; Prisma has no native way to
+// split one logical model across two schema files.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+model Company {
+  id        String   @id @default(cuid())
+  name      String
+  country   String?
+  isActive  Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @default(now()) @updatedAt
+  users     User[]
+
+  @@map("companies")
+}
+
+model User {
+  id        String   @id @default(cuid())
+  email     String   @unique
+  password  String
+  name      String?
+  role      String   @default("User")
+  companyId String?
+  company   Company? @relation(fields: [companyId], references: [id])
+  isActive  Boolean  @default(true)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@map("users")
+}
+
+model AppDocument {
+  id         String   @id @default(cuid())
+  collection String
+  tenantId   String
+  docId      String
+  data       Json
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @default(now()) @updatedAt
+
+  @@unique([collection, tenantId, docId])
+  @@index([collection, tenantId])
+  @@map("app_documents")
+}
+
+model AppSecret {
+  handle    String   @id
+  valueEnc  String
+  createdAt DateTime @default(now())
+  updatedAt DateTime @default(now()) @updatedAt
+
+  @@map("app_secrets")
+}
+
+model AuditEvent {
+  id         String   @id @default(cuid())
+  actorId    String?  @map("actor_id")
+  actorEmail String?  @map("actor_email")
+  action     String
+  targetType String   @map("target_type")
+  targetId   String?  @map("target_id")
+  companyId  String?  @map("company_id")
+  metadata   Json?
+  createdAt  DateTime @default(now()) @map("created_at")
+
+  @@index([companyId, createdAt])
+  @@index([targetType, targetId])
+  @@map("audit_events")
+}

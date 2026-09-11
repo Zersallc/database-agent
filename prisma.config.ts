@@ -4,8 +4,7 @@ import { defineConfig } from "prisma/config";
 config({ path: ".env.local" });
 
 function buildDatabaseUrl(): string | undefined {
-  const { PGUSER, PGPASSWORD, PGDATABASE, PGHOST, PGPORT, INSTANCE_CONNECTION_NAME, DATABASE_URL } =
-    process.env;
+  const { PGUSER, PGPASSWORD, PGDATABASE, PGHOST, PGPORT, DATABASE_URL } = process.env;
 
   if (!PGUSER || !PGPASSWORD || !PGDATABASE) {
     return DATABASE_URL;
@@ -18,28 +17,19 @@ function buildDatabaseUrl(): string | undefined {
   const user = encodeURIComponent(PGUSER);
   const pass = encodeURIComponent(PGPASSWORD.replace(/\\\$/g, "$"));
 
-  // Cloud Run: connect through the Cloud SQL Auth Proxy socket mounted via
-  // --add-cloudsql-instances, which bypasses the public-IP authorized-networks
-  // allowlist entirely (see lib/db.ts for the matching runtime config).
-  if (INSTANCE_CONNECTION_NAME) {
-    const host = encodeURIComponent(`/cloudsql/${INSTANCE_CONNECTION_NAME}`);
-    return `postgresql://${user}:${pass}@localhost/${PGDATABASE}?host=${host}`;
-  }
-
-  return `postgresql://${user}:${pass}@${PGHOST}:${PGPORT}/${PGDATABASE}?sslmode=require`;
+  return `postgresql://${user}:${pass}@${PGHOST}:${PGPORT}/${PGDATABASE}?sslmode=disable`;
 }
 
-// CAUTION: schema.prisma declares models for TWO physical databases now —
+// schema.prisma declares models for TWO physical databases —
 // Company/User/AppDocument/AppSecret/AuditEvent (self-hosted, see lib/db.ts)
 // and Hospital/Inventory/ItemSustainability/ObservationsDb (Medi-Merchant's
-// Cloud SQL, see lib/db-medimerchant.ts). This config's datasource.url
-// (built from PG* env vars below) only ever points at ONE of them at a time
-// — currently the self-hosted app database. `prisma generate` is safe to run
-// regardless (it only produces types). `prisma db push`/`migrate` against
-// the full schema is NOT: it would try to create Medi-Merchant's tables in
-// whichever database this resolves to. To push a schema change to the other
-// database, point PG*/MEDIMERCHANT_PG* at it explicitly (or use a scoped
-// --config override) rather than running a plain `prisma db push` here.
+// Cloud SQL, see lib/db-medimerchant.ts). This config exists only for
+// `prisma generate` (produces types, never connects) — the datasource.url
+// above is not used for any real connection. Deploy-time schema sync
+// (`prisma db push`, in start.sh) uses prisma.app.config.ts +
+// prisma/schema.app.prisma instead, scoped to just the app's own database —
+// pushing the full schema here would try to create Medi-Merchant's tables in
+// whichever database PG* happens to resolve to.
 export default defineConfig({
   schema: "prisma/schema.prisma",
   experimental: {
