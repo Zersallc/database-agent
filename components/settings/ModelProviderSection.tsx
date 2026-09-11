@@ -1,7 +1,14 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
-import { CheckCircle2Icon, ExternalLinkIcon, PlusIcon, Trash2Icon, XCircleIcon } from "lucide-react";
+import {
+  CheckCircle2Icon,
+  ExternalLinkIcon,
+  PencilIcon,
+  PlusIcon,
+  Trash2Icon,
+  XCircleIcon,
+} from "lucide-react";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -66,6 +73,95 @@ function StatusBadge({ provider }: { provider: ModelProvider }) {
   return <Badge variant="outline">Untested</Badge>;
 }
 
+/** Model/base URL/API key for an existing provider. Identity (provider/kind) is fixed at creation. */
+function EditProviderForm({
+  provider,
+  onSaved,
+  onCancel,
+}: {
+  provider: ModelProvider;
+  onSaved: () => Promise<void>;
+  onCancel: () => void;
+}) {
+  const [model, setModel] = useState(provider.model);
+  const [baseUrl, setBaseUrl] = useState(provider.base_url ?? "");
+  const [apiKey, setApiKey] = useState("");
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const showBaseUrl = provider.kind === "openai_compatible" || Boolean(provider.base_url);
+
+  const submit = async (event: React.FormEvent) => {
+    event.preventDefault();
+    setSaving(true);
+    setError(null);
+    try {
+      await updateModelProvider(provider.id, {
+        model: model.trim(),
+        ...(showBaseUrl && baseUrl.trim() ? { base_url: baseUrl.trim() } : {}),
+        ...(apiKey.trim() ? { api_key: apiKey.trim() } : {}),
+      });
+      await onSaved();
+      onCancel();
+    } catch (cause) {
+      setError(describeError(cause));
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <form onSubmit={submit} className="mt-2 space-y-3 rounded-lg border border-border p-3">
+      <div className="grid gap-1.5">
+        <Label htmlFor={`mp-edit-model-${provider.id}`}>Model</Label>
+        <Input
+          id={`mp-edit-model-${provider.id}`}
+          value={model}
+          onChange={(event) => setModel(event.target.value)}
+          autoComplete="off"
+        />
+      </div>
+
+      {showBaseUrl && (
+        <div className="grid gap-1.5">
+          <Label htmlFor={`mp-edit-base-url-${provider.id}`}>Base URL</Label>
+          <Input
+            id={`mp-edit-base-url-${provider.id}`}
+            value={baseUrl}
+            onChange={(event) => setBaseUrl(event.target.value)}
+            placeholder="https://api.example.com/v1"
+            autoComplete="off"
+          />
+        </div>
+      )}
+
+      <div className="grid gap-1.5">
+        <Label htmlFor={`mp-edit-key-${provider.id}`}>API key</Label>
+        <Input
+          id={`mp-edit-key-${provider.id}`}
+          type="password"
+          value={apiKey}
+          onChange={(event) => setApiKey(event.target.value)}
+          placeholder="Leave blank to keep current"
+          autoComplete="off"
+          spellCheck={false}
+        />
+      </div>
+
+      {error && <p className="text-xs text-destructive">{error}</p>}
+
+      <div className="flex justify-end gap-2">
+        <Button type="button" variant="ghost" size="sm" onClick={onCancel} disabled={saving}>
+          Cancel
+        </Button>
+        <Button type="submit" size="sm" disabled={!model.trim() || saving}>
+          {saving ? "Saving…" : "Save changes"}
+        </Button>
+      </div>
+    </form>
+  );
+}
+
 /** One configured provider, with the actions that apply to it. */
 function ProviderRow({
   provider,
@@ -76,6 +172,7 @@ function ProviderRow({
 }) {
   const [busy, setBusy] = useState<null | "test" | "default" | "delete">(null);
   const [error, setError] = useState<string | null>(null);
+  const [editing, setEditing] = useState(false);
 
   const run = async (action: "test" | "default" | "delete", work: () => Promise<unknown>) => {
     setBusy(action);
@@ -127,6 +224,15 @@ function ProviderRow({
           >
             {busy === "test" ? "Testing…" : "Test"}
           </Button>
+          <Button
+            size="sm"
+            variant="ghost"
+            disabled={busy !== null}
+            aria-label="Edit"
+            onClick={() => setEditing((prev) => !prev)}
+          >
+            <PencilIcon />
+          </Button>
           <AlertDialog>
             <AlertDialogTrigger
               render={
@@ -163,6 +269,14 @@ function ProviderRow({
         >
           {error ?? provider.status_detail}
         </p>
+      )}
+
+      {editing && (
+        <EditProviderForm
+          provider={provider}
+          onSaved={onChanged}
+          onCancel={() => setEditing(false)}
+        />
       )}
     </div>
   );
