@@ -466,7 +466,6 @@ export function DatabaseMappingPage() {
       header: "Columns",
       cell: ({ row }) => {
         const r = row.original;
-        if (r.is_managed) return <span className="text-xs text-muted-foreground">Grant-based</span>;
         if (!r.columns) return <span className="text-xs text-muted-foreground">—</span>;
         return (
           <Button variant="outline" size="sm" onClick={() => setColumnsTarget(r)}>
