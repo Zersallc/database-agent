@@ -15,37 +15,78 @@ jobs:
       # Docker, no registry involved) — triggered over the same ops HTTP API
       # the syslab_run MCP tool uses (server.systemslab.app, bearer token
       # auth). No GCP credentials, no Artifact Registry, no Cloud Run.
-      - name: Deploy on SysLab
+      #
+      # Fire-and-poll, not one long request: Cloudflare's tunnel edge closes
+      # a request around 100s regardless of this job's own --max-time, so a
+      # build that takes longer than that (anything but a fully-cached one)
+      # gets a false failure here even if the build itself succeeds. Kick it
+      # off detached instead, and poll a short marker file rather than
+      # waiting on one HTTP response.
+      - name: Start deploy on SysLab
         env:
           OPS_TOKEN: ${{ secrets.SYSLAB_OPS_TOKEN }}
         run: |
-          response=$(curl -s -w "\n%{http_code}" --max-time 620 \
+          MARKER="/tmp/database-agent-deploy-$(date +%s)"
+          echo "MARKER=$MARKER" >> "$GITHUB_ENV"
+
+          REMOTE_CMD="rm -f ${MARKER}.done; nohup sh -c 'cd /home/syslab/database-agent && git fetch origin main && git reset --hard origin/main && cd /home/syslab/syslab-server && docker compose build database-agent && docker compose up -d database-agent; echo \$? > ${MARKER}.done' > ${MARKER}.log 2>&1 & echo started"
+
+          BODY=$(node -e "console.log(JSON.stringify({command: process.argv[1], timeout: 20}))" "$REMOTE_CMD")
+
+          response=$(curl -s -w "\n%{http_code}" --max-time 30 \
             -X POST "https://server.systemslab.app/api/run" \
             -H "Authorization: Bearer ${OPS_TOKEN}" \
             -H "Content-Type: application/json" \
-            -d '{
-              "command": "cd /home/syslab/database-agent && git fetch origin main && git reset --hard origin/main && cd /home/syslab/syslab-server && docker compose build database-agent && docker compose up -d database-agent",
-              "timeout": 600
-            }')
+            -d "$BODY")
 
           http_code=$(echo "$response" | tail -1)
-          body=$(echo "$response" | sed '$d')
-          echo "$body"
-
+          echo "$response" | sed '$d'
           if [ "$http_code" != "200" ]; then
-            echo "Deploy request failed with HTTP $http_code"
+            echo "Failed to start the deploy (HTTP $http_code)"
             exit 1
           fi
 
-          exit_code=$(echo "$body" | node -e "let d='';process.stdin.on('data',c=>d+=c);process.stdin.on('end',()=>{try{console.log(JSON.parse(d).exit_code)}catch{console.log(1)}})")
-          if [ "$exit_code" != "0" ]; then
-            echo "Remote command exited with code $exit_code"
-            exit 1
-          fi
+      - name: Wait for it to finish
+        env:
+          OPS_TOKEN: ${{ secrets.SYSLAB_OPS_TOKEN }}
+        run: |
+          check() {
+            curl -s -w "\n%{http_code}" --max-time 30 \
+              -X POST "https://server.systemslab.app/api/run" \
+              -H "Authorization: Bearer ${OPS_TOKEN}" \
+              -H "Content-Type: application/json" \
+              -d "{\"command\": \"$1\", \"timeout\": 10}"
+          }
+
+          for i in $(seq 1 40); do
+            sleep 15
+            response=$(check "cat ${MARKER}.done 2>/dev/null || echo pending")
+            http_code=$(echo "$response" | tail -1)
+            body=$(echo "$response" | sed '$d')
+            [ "$http_code" = "200" ] || continue
+
+            stdout=$(echo "$body" | node -e "let d='';process.stdin.on('data',c=>d+=c);process.stdin.on('end',()=>{try{process.stdout.write(JSON.parse(d).stdout.trim())}catch{}})")
+
+            if [ "$stdout" = "pending" ] || [ -z "$stdout" ]; then
+              echo "Still building… ($((i * 15))s)"
+              continue
+            fi
+
+            echo "Deploy finished with exit code $stdout"
+            if [ "$stdout" != "0" ]; then
+              echo "--- log ---"
+              check "cat ${MARKER}.log" | sed '$d' \
+                | node -e "let d='';process.stdin.on('data',c=>d+=c);process.stdin.on('end',()=>{try{console.log(JSON.parse(d).stdout)}catch{console.log(d)}})"
+              exit 1
+            fi
+            exit 0
+          done
+
+          echo "Timed out waiting for the deploy to finish (10 minutes)"
+          exit 1
 
       - name: Verify deployment
         run: |
-          sleep 5
           code=$(curl -s -o /dev/null -w "%{http_code}" --max-time 15 "https://chat.systemslab.app/api/v1/health")
           echo "Health check: HTTP $code"
           if [ "$code" != "200" ] && [ "$code" != "503" ]; then
