@@ -114,29 +114,63 @@ export function renderSchema(tables: SchemaTable[]): string {
   return `## Database schema\n\n${rendered}`;
 }
 
+export type PromptConnection = { name: string; engine: string; schema: SchemaTable[] | null };
+
 export type PromptInput = {
   /** The tenant's playbook: system prompt plus enabled skills, already assembled. */
   playbookContext: string;
   responseDetail: ResponseDetail;
-  connection: { name: string; engine: string } | null;
-  schema: SchemaTable[] | null;
+  /** Every database this workspace has — see AgentRunInput.connections for why. */
+  connections: PromptConnection[];
 };
 
-export function buildSystemPrompt(input: PromptInput): string {
-  const sections = [CORE_BEHAVIOR, OUTPUT_FORMAT, DETAIL_GUIDANCE[input.responseDetail]];
+function renderConnectionIntro(connections: PromptConnection[]): string {
+  if (connections.length === 0) {
+    return "## Connection\n\nNo database is attached to this conversation. You cannot run queries. Say so and explain that a connection needs to be selected.";
+  }
 
-  if (input.connection) {
-    sections.push(
-      `## Connection\n\nYou are querying "${input.connection.name}" (${input.connection.engine}). Write SQL in that engine's dialect.` +
-        (input.connection.engine === "demo"
-          ? "\n\nThis is the built-in sample dataset, not real data. Say so in your answer so nobody acts on these numbers."
-          : "")
-    );
-  } else {
-    sections.push(
-      "## Connection\n\nNo database is attached to this conversation. You cannot run queries. Say so and explain that a connection needs to be selected."
+  if (connections.length === 1) {
+    const c = connections[0];
+    return (
+      `## Connection\n\nYou are querying "${c.name}" (${c.engine}). Write SQL in that engine's dialect.` +
+      (c.engine === "demo"
+        ? "\n\nThis is the built-in sample dataset, not real data. Say so in your answer so nobody acts on these numbers."
+        : "")
     );
   }
+
+  return (
+    `## Databases\n\nThis workspace has ${connections.length} databases: ${connections.map((c) => c.name).join(", ")}. ` +
+    `Identify which one is relevant to the question from the schemas below, and pass its exact name as ` +
+    `"database" when calling run_sql. If more than one could plausibly answer it, ask rather than guessing.`
+  );
+}
+
+/** All schemas, each under its own heading when there's more than one connection. */
+function renderSchemas(connections: PromptConnection[]): string | null {
+  if (connections.length === 0) return null;
+
+  if (connections.length === 1) {
+    const c = connections[0];
+    return c.schema ? renderSchema(c.schema) : null;
+  }
+
+  return connections
+    .map((c) =>
+      c.schema
+        ? `### ${c.name}\n\n${renderSchema(c.schema)}`
+        : `### ${c.name}\n\nThe schema could not be read for this database. Say so rather than guessing at table names.`
+    )
+    .join("\n\n");
+}
+
+export function buildSystemPrompt(input: PromptInput): string {
+  const sections = [
+    CORE_BEHAVIOR,
+    OUTPUT_FORMAT,
+    DETAIL_GUIDANCE[input.responseDetail],
+    renderConnectionIntro(input.connections),
+  ];
 
   if (input.playbookContext.trim()) {
     sections.push(
@@ -144,7 +178,8 @@ export function buildSystemPrompt(input: PromptInput): string {
     );
   }
 
-  if (input.schema) sections.push(renderSchema(input.schema));
+  const schemas = renderSchemas(input.connections);
+  if (schemas) sections.push(schemas);
 
   return sections.join("\n\n---\n\n");
 }

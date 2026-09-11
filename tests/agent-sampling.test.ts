@@ -54,6 +54,7 @@ function scriptedClient(
 }
 
 const connection = {
+  id: "conn_test",
   name: "Test",
   engine: "postgres",
   schema: null,
@@ -75,7 +76,7 @@ async function run(
     playbookContext: "",
     responseDetail: "balanced",
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    connection: connection as any,
+    connections: [connection as any],
     client,
     reportGenerator: null,
   })) {

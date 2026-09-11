@@ -15,8 +15,9 @@ import { ApiError, toApiError } from "@/lib/api/errors";
 import { newId } from "@/lib/api/ids";
 import { runAgent, type AgentEvent, type AgentStep } from "@/lib/agent";
 import type { ResponseDetail } from "@/lib/agent/prompt";
+import type { SchemaTable } from "@/lib/connectors";
 import { stores } from "@/lib/providers";
-import { getSchema, requireConnection, type ConnectionDoc } from "./connections";
+import { getSchema, listConnections, requireConnection, type ConnectionDoc } from "./connections";
 import {
   appendMessage,
   conversationHistory,
@@ -112,6 +113,10 @@ export async function* executeRun(
   const now = new Date().toISOString();
   const runId = newId("run");
 
+  // Kept for the run record's own connection_id field (informational — which
+  // connection was "primary" when this run started) and for the case a
+  // caller explicitly names one. The agent itself gets every connection
+  // this tenant has, not just this one — see agentConnections below.
   const connectionId = input.connectionId ?? conversation.connection_id;
   let connection: ConnectionDoc | null = null;
   if (connectionId) {
@@ -152,36 +157,41 @@ export async function* executeRun(
 
     const playbookContext = await buildAgentContext(tenantId);
 
-    // Introspection failing should not kill the run: the agent can still say
-    // something useful, and it is told the schema is unavailable so it does not
-    // invent table names.
-    let schema = null;
-    if (connection) {
-      try {
-        schema = (await getSchema(tenantId, connection)).tables;
-      } catch {
-        schema = [];
-      }
-    }
-
-    const agentConnection = connection
-      ? {
-          name: connection.name,
-          engine: connection.engine,
+    // Every connection this tenant has — the agent identifies which one a
+    // question is about itself (see lib/agent's run_sql "database"
+    // parameter), rather than being limited to whichever one a person
+    // picked before asking. Introspection failing for one connection
+    // doesn't kill the run or the others: that one is listed with an empty
+    // schema, so the agent knows it exists but not to guess table names on
+    // it.
+    const allConnections = (await listConnections(tenantId, { order: "asc", limit: 50, cursor: null })).data;
+    const agentConnections = await Promise.all(
+      allConnections.map(async (conn) => {
+        let schema: SchemaTable[] = [];
+        try {
+          schema = (await getSchema(tenantId, conn)).tables;
+        } catch {
+          schema = [];
+        }
+        return {
+          id: conn.id,
+          name: conn.name,
+          engine: conn.engine,
           schema,
           // Each query opens its own connector. That costs a connection setup
           // per query; the alternative is holding one open across the whole
           // run, including across model latency, which is worse for a database
           // with a bounded connection pool.
           execute: async (sql: string) => {
-            const query = await runQuery(tenantId, connection!, { sql, userId });
+            const query = await runQuery(tenantId, conn, { sql, userId });
             if (query.status === "failed") {
               throw new Error(query.error?.message ?? "The query failed.");
             }
             return { queryId: query.id, result: toQueryResult(query) };
           },
-        }
-      : null;
+        };
+      })
+    );
 
     let final: Extract<AgentEvent, { type: "completed" }> | null = null;
     let failure: ApiError | null = null;
@@ -268,7 +278,7 @@ export async function* executeRun(
       history,
       playbookContext,
       responseDetail: input.responseDetail,
-      connection: agentConnection,
+      connections: agentConnections,
       client: resolved?.client ?? null,
       reportGenerator,
     })) {

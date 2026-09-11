@@ -24,11 +24,11 @@ import {
 import { toApiError } from "@/lib/api/errors";
 import { newRequestId } from "@/lib/api/ids";
 import { readJson } from "@/lib/api/validate";
-import { getSchema, type ConnectionDoc } from "@/lib/services/connections";
+import type { SchemaTable } from "@/lib/connectors";
+import { getSchema, listConnections } from "@/lib/services/connections";
 import { resolveModelClient } from "@/lib/services/model-providers";
 import { buildAgentContext } from "@/lib/services/playbook";
 import { runQuery, toQueryResult } from "@/lib/services/queries";
-import { stores } from "@/lib/providers";
 
 export const runtime = "nodejs";
 export const maxDuration = 300;
@@ -82,8 +82,6 @@ export async function POST(request: Request): Promise<Response> {
       content: message.content,
     }));
 
-    const connection = await resolveConnection(principal.tenantId, payload.connectionId);
-
     // The playbook shapes the system prompt with "this overrides your general
     // assumptions" framing, so it has to come from the server's own record —
     // trusting whatever the client sent here would let a tampered request body
@@ -92,14 +90,39 @@ export async function POST(request: Request): Promise<Response> {
     // is no longer read.
     const playbookContext = await buildAgentContext(principal.tenantId);
 
-    let schema = null;
-    if (connection) {
-      try {
-        schema = (await getSchema(principal.tenantId, connection)).tables;
-      } catch {
-        schema = [];
-      }
-    }
+    // Every connection this tenant has, not just `payload.connectionId` — the
+    // agent identifies which database a question is about itself. The field
+    // stays in the request type for shape compatibility with older clients
+    // but is no longer used to restrict anything.
+    const allConnections = (
+      await listConnections(principal.tenantId, { order: "asc", limit: 50, cursor: null })
+    ).data;
+    const connections = await Promise.all(
+      allConnections.map(async (connection) => {
+        let schema: SchemaTable[] = [];
+        try {
+          schema = (await getSchema(principal.tenantId, connection)).tables;
+        } catch {
+          schema = [];
+        }
+        return {
+          id: connection.id,
+          name: connection.name,
+          engine: connection.engine,
+          schema,
+          execute: async (sql: string) => {
+            const query = await runQuery(principal.tenantId, connection, {
+              sql,
+              userId: principal.userId,
+            });
+            if (query.status === "failed") {
+              throw new Error(query.error?.message ?? "The query failed.");
+            }
+            return { queryId: query.id, result: toQueryResult(query) };
+          },
+        };
+      })
+    );
 
     const resolved = await resolveModelClient(principal.tenantId);
 
@@ -110,23 +133,7 @@ export async function POST(request: Request): Promise<Response> {
       playbookContext,
       responseDetail: payload.responseDetail ?? "balanced",
       client: resolved?.client ?? null,
-      connection: connection
-        ? {
-            name: connection.name,
-            engine: connection.engine,
-            schema,
-            execute: async (sql: string) => {
-              const query = await runQuery(principal.tenantId, connection, {
-                sql,
-                userId: principal.userId,
-              });
-              if (query.status === "failed") {
-                throw new Error(query.error?.message ?? "The query failed.");
-              }
-              return { queryId: query.id, result: toQueryResult(query) };
-            },
-          }
-        : null,
+      connections,
       // This legacy endpoint predates report generation and nothing exercises
       // it anymore; the real v1 API (lib/services/runs.ts) wires it up.
       reportGenerator: null,
@@ -146,29 +153,4 @@ export async function POST(request: Request): Promise<Response> {
       { status: apiError.status, headers }
     );
   }
-}
-
-/**
- * The legacy client sends hardcoded connection IDs from its mock data, which do
- * not exist server-side. Rather than failing, fall back to the workspace's first
- * connection — which on a fresh install is the sample dataset, so the demo keeps
- * working exactly as it did.
- */
-async function resolveConnection(
-  tenantId: string,
-  connectionId?: string
-): Promise<ConnectionDoc | null> {
-  const { documents } = stores();
-
-  if (connectionId) {
-    const exact = await documents.get<ConnectionDoc>("connections", tenantId, connectionId);
-    if (exact) return exact;
-  }
-
-  const [first] = await documents.list<ConnectionDoc>("connections", tenantId, {
-    orderBy: "created_at",
-    order: "asc",
-    limit: 1,
-  });
-  return first ?? null;
 }

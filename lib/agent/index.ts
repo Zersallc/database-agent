@@ -86,6 +86,7 @@ function presentsUnbackedData(text: string): boolean {
 }
 
 export type AgentConnection = {
+  id: string;
   name: string;
   engine: string;
   schema: SchemaTable[] | null;
@@ -117,7 +118,14 @@ export type AgentRunInput = {
   history: { role: "user" | "assistant"; content: string }[];
   playbookContext: string;
   responseDetail: ResponseDetail;
-  connection: AgentConnection | null;
+  /**
+   * Every database this workspace has, not one pre-selected connection. A
+   * company can register more than one, and which is relevant to a given
+   * question is not known ahead of the question — so the model is shown all
+   * of them and picks per query, the same way a person would. Empty means no
+   * database is attached to this conversation.
+   */
+  connections: AgentConnection[];
   /**
    * The configured provider. Null means none is set up, and the run returns the
    * setup notice rather than failing — an unconfigured workspace should still
@@ -130,28 +138,51 @@ export type AgentRunInput = {
   reportGenerator: ReportGenerator | null;
 };
 
-const RUN_SQL_TOOL: ToolDefinition = {
-  name: "run_sql",
-  description:
-    "Run a read-only SQL query against the connected database and get the rows back. " +
-    "Call this before stating any figure — never answer from memory or from the schema alone. " +
-    "One statement per call. If it errors, read the message, fix the query, and call again.",
-  parameters: {
-    type: "object",
-    properties: {
-      sql: {
-        type: "string",
-        description: "A single read-only SQL statement in the connection's dialect.",
+const RUN_SQL_TOOL_NAME = "run_sql";
+
+/**
+ * One database needs no selector — there is nothing to choose. More than one
+ * does, and the parameter only exists in that shape: adding an always-present
+ * "database" argument would make the common single-connection case ask the
+ * model to name the one thing it already knows, for no benefit.
+ */
+function buildRunSqlTool(connections: AgentConnection[]): ToolDefinition {
+  const multiple = connections.length > 1;
+  return {
+    name: RUN_SQL_TOOL_NAME,
+    description:
+      (multiple
+        ? `Run a read-only SQL query against one of this workspace's databases and get the rows back. ` +
+          `Say which one with "database" — see each one's schema below to decide, and check there before ` +
+          `assuming a table lives on the wrong one. `
+        : "Run a read-only SQL query against the connected database and get the rows back. ") +
+      "Call this before stating any figure — never answer from memory or from the schema alone. " +
+      "One statement per call. If it errors, read the message, fix the query, and call again.",
+    parameters: {
+      type: "object",
+      properties: {
+        ...(multiple
+          ? {
+              database: {
+                type: "string",
+                description: `Exact database name, one of: ${connections.map((c) => c.name).join(", ")}.`,
+              },
+            }
+          : {}),
+        sql: {
+          type: "string",
+          description: "A single read-only SQL statement in the connection's dialect.",
+        },
+        purpose: {
+          type: "string",
+          description: "One short phrase describing what this query is for, shown to the user.",
+        },
       },
-      purpose: {
-        type: "string",
-        description: "One short phrase describing what this query is for, shown to the user.",
-      },
+      required: multiple ? ["database", "sql", "purpose"] : ["sql", "purpose"],
+      additionalProperties: false,
     },
-    required: ["sql", "purpose"],
-    additionalProperties: false,
-  },
-};
+  };
+}
 
 const GENERATE_ESG_REPORT_TOOL: ToolDefinition = {
   name: "generate_esg_report",
@@ -207,10 +238,7 @@ export async function* runAgent(input: AgentRunInput): AsyncGenerator<AgentEvent
   const system = buildSystemPrompt({
     playbookContext: input.playbookContext,
     responseDetail: input.responseDetail,
-    connection: input.connection
-      ? { name: input.connection.name, engine: input.connection.engine }
-      : null,
-    schema: input.connection?.schema ?? null,
+    connections: input.connections.map((c) => ({ name: c.name, engine: c.engine, schema: c.schema })),
   });
 
   const messages: ModelMessage[] = [
@@ -226,7 +254,7 @@ export async function* runAgent(input: AgentRunInput): AsyncGenerator<AgentEvent
   ];
 
   const tools = [
-    ...(input.connection ? [RUN_SQL_TOOL] : []),
+    ...(input.connections.length > 0 ? [buildRunSqlTool(input.connections)] : []),
     ...(input.reportGenerator ? [GENERATE_ESG_REPORT_TOOL] : []),
   ];
   let answer = "";
@@ -419,12 +447,29 @@ export async function* runAgent(input: AgentRunInput): AsyncGenerator<AgentEvent
           continue;
         }
 
-        if (call.name !== RUN_SQL_TOOL.name || !input.connection) {
+        if (call.name !== RUN_SQL_TOOL_NAME || input.connections.length === 0) {
           messages.push({
             role: "tool",
             toolCallId: call.id,
             toolName: call.name,
             content: "No database is attached to this conversation, so queries cannot be run.",
+            isError: true,
+          });
+          continue;
+        }
+
+        const databaseName = typeof call.input.database === "string" ? call.input.database.trim() : "";
+        const target =
+          input.connections.length === 1
+            ? input.connections[0]
+            : input.connections.find((c) => c.name.toLowerCase() === databaseName.toLowerCase());
+
+        if (!target) {
+          messages.push({
+            role: "tool",
+            toolCallId: call.id,
+            toolName: call.name,
+            content: `No database named "${databaseName}". Available: ${input.connections.map((c) => c.name).join(", ")}.`,
             isError: true,
           });
           continue;
@@ -447,7 +492,7 @@ export async function* runAgent(input: AgentRunInput): AsyncGenerator<AgentEvent
         }
 
         try {
-          const { queryId, result } = await input.connection.execute(sql);
+          const { queryId, result } = await target.execute(sql);
           yield emit({
             label: purpose || "Ran query",
             status: "done",
