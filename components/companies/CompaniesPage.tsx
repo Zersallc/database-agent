@@ -2,7 +2,8 @@
 
 import { useEffect, useState } from "react";
 import { toast } from "sonner";
-import { Building2Icon, PencilIcon, PlusIcon, Trash2Icon } from "lucide-react";
+import { Building2Icon, DatabaseIcon, PencilIcon, PlusIcon, Trash2Icon } from "lucide-react";
+import { DataAccessDialog } from "./DataAccessDialog";
 import type { ExportableColumnDef } from "@/components/shared/DataTable";
 import { DataTable } from "@/components/shared/DataTable";
 import { FilterBar, useFilteredData, type FilterConfig } from "@/components/shared/FilterBar";
@@ -64,6 +65,7 @@ export function CompaniesPage() {
   const [formError, setFormError] = useState<string | null>(null);
 
   const [deleteTarget, setDeleteTarget] = useState<CompanyRow | null>(null);
+  const [dataAccessTarget, setDataAccessTarget] = useState<CompanyRow | null>(null);
 
   const filters = useFilteredData(companies, FILTER_CONFIG);
 
@@ -177,6 +179,14 @@ export function CompaniesPage() {
       enableSorting: false,
       cell: ({ row }) => (
         <div className="flex items-center gap-1">
+          <Button
+            variant="ghost"
+            size="icon-sm"
+            aria-label="Data access"
+            onClick={() => setDataAccessTarget(row.original)}
+          >
+            <DatabaseIcon className="size-3.5" />
+          </Button>
           <Button variant="ghost" size="icon-sm" aria-label="Edit" onClick={() => openEdit(row.original)}>
             <PencilIcon className="size-3.5" />
           </Button>
@@ -282,6 +292,15 @@ export function CompaniesPage() {
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
+
+      {dataAccessTarget && (
+        <DataAccessDialog
+          companyId={dataAccessTarget.id}
+          companyName={dataAccessTarget.name}
+          open={dataAccessTarget !== null}
+          onOpenChange={(open) => !open && setDataAccessTarget(null)}
+        />
+      )}
     </div>
   );
 }
