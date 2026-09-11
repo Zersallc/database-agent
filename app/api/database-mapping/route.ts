@@ -1,8 +1,10 @@
 import { NextResponse } from "next/server";
 import { prisma } from "@/lib/db";
 import { requireAdminSession } from "@/lib/require-admin";
-import { listConnections, serializeConnection } from "@/lib/services/connections";
+import { getSchema, listConnections, serializeConnection } from "@/lib/services/connections";
 import { getCompanyDataAccess, listAssignableTables } from "@/lib/services/data-access";
+
+const MANAGED_CONNECTION_NAME = "Company data access (managed)";
 
 /**
  * Cross-company view of every registered database and what each company can
@@ -25,10 +27,30 @@ export async function GET() {
         listConnections(company.id, { order: "asc", limit: 50, cursor: null }),
         getCompanyDataAccess(company.id, company.id),
       ]);
+
+      const connections = await Promise.all(
+        connectionsPage.data.map(async (connection) => {
+          const serialized = serializeConnection(connection);
+          // The managed connection's tables come from the Data Access grant
+          // system (access.granted_tables) instead — this is only for
+          // connections with their own dedicated, ungated access, where
+          // "full access" still leaves the question "to what?" unanswered.
+          if (connection.name === MANAGED_CONNECTION_NAME) {
+            return { ...serialized, tables: null as string[] | null };
+          }
+          try {
+            const schema = await getSchema(company.id, connection);
+            return { ...serialized, tables: schema.tables.map((t) => t.name) };
+          } catch {
+            return { ...serialized, tables: [] as string[] };
+          }
+        })
+      );
+
       return {
         company_id: company.id,
         company_name: company.name,
-        connections: connectionsPage.data.map(serializeConnection),
+        connections,
         granted_tables: access.grantedTables,
       };
     })

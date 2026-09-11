@@ -3,7 +3,6 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
 import { DatabaseIcon, PencilIcon, PlusIcon, Trash2Icon, ZapIcon } from "lucide-react";
-import { PageHeader } from "@/components/app-shell/PageHeader";
 import { DataAccessDialog } from "@/components/companies/DataAccessDialog";
 import type { ExportableColumnDef } from "@/components/shared/DataTable";
 import { DataTable } from "@/components/shared/DataTable";
@@ -50,6 +49,8 @@ type MappingConnection = {
   port: number | null;
   database: string | null;
   username: string | null;
+  /** null for the managed connection (its tables come from granted_tables instead). */
+  tables: string[] | null;
 };
 
 type MappingCompany = {
@@ -115,7 +116,7 @@ function buildRows(companies: MappingCompany[]): Row[] {
         companyName: company.company_name,
         connection,
         isManaged,
-        grantedTables: isManaged ? company.granted_tables : null,
+        grantedTables: isManaged ? company.granted_tables : connection.tables,
         groupKey: groupKeyFor(connection),
         groupLabel: connection.database || connection.name,
       });
@@ -436,21 +437,21 @@ export function DatabaseMappingPage() {
     },
     {
       id: "tables",
-      accessorFn: (row) => (row.isManaged ? (row.grantedTables ?? []).join(", ") : "Full access"),
+      accessorFn: (row) => (row.grantedTables ?? []).join(", "),
       header: "Tables",
       enableSorting: false,
       meta: {
         exportHeader: "Tables",
-        exportValue: (row) => (row.isManaged ? (row.grantedTables ?? []).join(", ") : "Full access"),
+        exportValue: (row) => (row.grantedTables ?? []).join(", "),
       },
       cell: ({ row }) => {
-        const r = row.original;
-        if (!r.isManaged) {
-          return <span className="text-xs text-muted-foreground">Full access</span>;
-        }
-        const tables = r.grantedTables ?? [];
+        const tables = row.original.grantedTables ?? [];
         if (tables.length === 0) {
-          return <span className="text-xs text-muted-foreground">No tables granted</span>;
+          return (
+            <span className="text-xs text-muted-foreground">
+              {row.original.isManaged ? "No tables granted" : "No tables found"}
+            </span>
+          );
         }
         return (
           <div className="flex max-w-xs flex-wrap gap-1">
@@ -526,26 +527,23 @@ export function DatabaseMappingPage() {
   ];
 
   return (
-    <div className="flex h-svh flex-col">
-      <PageHeader title="Database Mapping" />
+    <div className="space-y-4 p-6">
+      <div className="flex items-center justify-between">
+        <div className="flex items-center gap-2">
+          <DatabaseIcon className="size-5 text-muted-foreground" />
+          <h1 className="text-lg font-semibold">Database Mapping</h1>
+        </div>
+        <Button size="sm" className="gap-1.5" onClick={openAdd}>
+          <PlusIcon className="size-3.5" />
+          Add database
+        </Button>
+      </div>
+      <p className="-mt-2 text-sm text-muted-foreground">
+        Every registered database and which companies have access to each. Table access is
+        enforced by a dedicated Postgres role per company, not an app-level filter.
+      </p>
 
-      <div className="flex-1 overflow-y-auto">
-        <div className="mx-auto w-full max-w-5xl space-y-4 px-4 py-6">
-          <div className="flex items-start justify-between gap-4">
-            <div>
-              <h1 className="text-xl font-semibold">Database Mapping</h1>
-              <p className="mt-1 text-sm text-muted-foreground">
-                Every registered database and which companies have access to each. Table access
-                is enforced by a dedicated Postgres role per company, not an app-level filter.
-              </p>
-            </div>
-            <Button size="sm" onClick={openAdd} className="shrink-0">
-              <PlusIcon className="size-3.5" />
-              Add database
-            </Button>
-          </div>
-
-          <FilterBar
+      <FilterBar
             data={rows}
             filterConfig={FILTER_CONFIG}
             search={filters.search}
@@ -595,8 +593,6 @@ export function DatabaseMappingPage() {
               </CardContent>
             </Card>
           )}
-        </div>
-      </div>
 
       {dataAccessTarget && (
         <DataAccessDialog
