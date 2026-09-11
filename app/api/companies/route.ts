@@ -5,13 +5,20 @@ import { recordAuditEvent } from "@/lib/services/audit";
 import { serializeCompany, validateLogoInput } from "@/lib/services/company-logo";
 
 export async function GET() {
-  const { response } = await requireAdminSession();
+  const { session, response } = await requireAdminSession();
   if (response) return response;
 
-  const companies = await prisma.company.findMany({
-    include: { _count: { select: { users: true } } },
-    orderBy: { createdAt: "desc" },
-  });
+  // Developers can switch between companies, so they need the full list to
+  // pick from. Every other admin only ever manages their own company.
+  const isDeveloper = session.user.role === "Developer";
+  const companies =
+    !isDeveloper && !session.user.companyId
+      ? []
+      : await prisma.company.findMany({
+          where: isDeveloper ? undefined : { id: session.user.companyId ?? undefined },
+          include: { _count: { select: { users: true } } },
+          orderBy: { createdAt: "desc" },
+        });
 
   return NextResponse.json({ companies: companies.map(serializeCompany) });
 }

@@ -37,7 +37,6 @@ import { useWorkspace } from "@/lib/chat-store";
 import { useProfile } from "@/lib/profile";
 import { isAdminRole } from "@/lib/roles";
 import { CompanySwitcher } from "./CompanySwitcher";
-import { ConnectionSwitcher } from "./ConnectionSwitcher";
 
 const NAV = [
   { href: "/", label: "Chat", icon: SparklesIcon },
@@ -72,10 +71,11 @@ export function WorkspaceSidebar() {
 
   return (
     <Sidebar collapsible="icon">
-      <SidebarHeader>
-        {isDeveloper && <CompanySwitcher currentCompanyId={session?.user?.companyId ?? null} />}
-        <ConnectionSwitcher />
-      </SidebarHeader>
+      {isDeveloper && (
+        <SidebarHeader>
+          <CompanySwitcher currentCompanyId={session?.user?.companyId ?? null} />
+        </SidebarHeader>
+      )}
 
       <SidebarContent>
         <SidebarGroup>
