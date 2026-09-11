@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/db";
 import { requireAdminSession } from "@/lib/require-admin";
+import { diffFields, recordAuditEvent } from "@/lib/services/audit";
 
 function serializeCompany(company: {
   id: string;
@@ -23,7 +24,7 @@ function serializeCompany(company: {
 }
 
 export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
-  const { response } = await requireAdminSession();
+  const { session, response } = await requireAdminSession();
   if (response) return response;
 
   const { id } = await params;
@@ -50,11 +51,23 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
     include: { _count: { select: { users: true } } },
   });
 
+  const changes = diffFields(existing, data);
+  if (Object.keys(changes).length > 0) {
+    await recordAuditEvent({
+      actor: session.user,
+      action: "company.updated",
+      targetType: "company",
+      targetId: company.id,
+      companyId: company.id,
+      metadata: { changes },
+    });
+  }
+
   return NextResponse.json({ company: serializeCompany(company) });
 }
 
 export async function DELETE(_req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
-  const { response } = await requireAdminSession();
+  const { session, response } = await requireAdminSession();
   if (response) return response;
 
   const { id } = await params;
@@ -75,5 +88,15 @@ export async function DELETE(_req: NextRequest, { params }: { params: Promise<{ 
   }
 
   await prisma.company.delete({ where: { id } });
+
+  await recordAuditEvent({
+    actor: session.user,
+    action: "company.deleted",
+    targetType: "company",
+    targetId: id,
+    companyId: id,
+    metadata: { name: existing.name },
+  });
+
   return NextResponse.json({ ok: true });
 }

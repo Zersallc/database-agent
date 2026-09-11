@@ -13,7 +13,7 @@
  */
 
 import { randomBytes } from "crypto";
-import { prisma } from "@/lib/db";
+import { prismaMediMerchant as prisma } from "@/lib/db-medimerchant";
 import { createConnection, listConnections, requireConnection } from "./connections";
 
 const MANAGED_CONNECTION_NAME = "Company data access (managed)";

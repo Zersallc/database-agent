@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import bcrypt from "bcryptjs";
 import { prisma } from "@/lib/db";
 import { requireAdminSession } from "@/lib/require-admin";
+import { recordAuditEvent } from "@/lib/services/audit";
 
 function serializeUser(user: {
   id: string;
@@ -40,7 +41,7 @@ export async function GET() {
 }
 
 export async function POST(req: NextRequest) {
-  const { response } = await requireAdminSession();
+  const { session, response } = await requireAdminSession();
   if (response) return response;
 
   const body = await req.json().catch(() => null);
@@ -75,6 +76,15 @@ export async function POST(req: NextRequest) {
       isActive,
     },
     include: { company: { select: { id: true, name: true } } },
+  });
+
+  await recordAuditEvent({
+    actor: session.user,
+    action: "user.created",
+    targetType: "user",
+    targetId: user.id,
+    companyId: user.companyId,
+    metadata: { email: user.email, role: user.role },
   });
 
   return NextResponse.json({ user: serializeUser(user) }, { status: 201 });

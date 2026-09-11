@@ -29,6 +29,17 @@ function buildDatabaseUrl(): string | undefined {
   return `postgresql://${user}:${pass}@${PGHOST}:${PGPORT}/${PGDATABASE}?sslmode=require`;
 }
 
+// CAUTION: schema.prisma declares models for TWO physical databases now —
+// Company/User/AppDocument/AppSecret/AuditEvent (self-hosted, see lib/db.ts)
+// and Hospital/Inventory/ItemSustainability/ObservationsDb (Medi-Merchant's
+// Cloud SQL, see lib/db-medimerchant.ts). This config's datasource.url
+// (built from PG* env vars below) only ever points at ONE of them at a time
+// — currently the self-hosted app database. `prisma generate` is safe to run
+// regardless (it only produces types). `prisma db push`/`migrate` against
+// the full schema is NOT: it would try to create Medi-Merchant's tables in
+// whichever database this resolves to. To push a schema change to the other
+// database, point PG*/MEDIMERCHANT_PG* at it explicitly (or use a scoped
+// --config override) rather than running a plain `prisma db push` here.
 export default defineConfig({
   schema: "prisma/schema.prisma",
   experimental: {

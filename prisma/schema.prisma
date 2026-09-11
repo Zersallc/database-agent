@@ -160,6 +160,27 @@ model AppSecret {
   @@map("app_secrets")
 }
 
+/// Append-only record of admin actions (who did what, to what, when) — the
+/// traceability layer over Companies/Users/Connections/Data Access. No
+/// foreign keys on purpose: deleting a company or user must never delete the
+/// history that mentions it. actorId/actorEmail and targetId are plain
+/// strings, snapshotted at write time, not live references.
+model AuditEvent {
+  id         String   @id @default(cuid())
+  actorId    String?  @map("actor_id")
+  actorEmail String?  @map("actor_email")
+  action     String
+  targetType String   @map("target_type")
+  targetId   String?  @map("target_id")
+  companyId  String?  @map("company_id")
+  metadata   Json?
+  createdAt  DateTime @default(now()) @map("created_at")
+
+  @@index([companyId, createdAt])
+  @@index([targetType, targetId])
+  @@map("audit_events")
+}
+
 /// One-time snapshot mirror of the "Observations DB" tab in the INTAJ - QHSE
 /// Observation Google Sheet — a field HSE (health & safety) observation log,
 /// unrelated to Medi-Merchant. Column names match the Sheet exactly, same

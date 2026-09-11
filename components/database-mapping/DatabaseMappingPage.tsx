@@ -51,6 +51,17 @@ type MappingCompany = {
   granted_tables: string[];
 };
 
+type AuditEvent = {
+  id: string;
+  actor_email: string | null;
+  action: string;
+  target_type: string;
+  target_id: string | null;
+  company_id: string | null;
+  metadata: Record<string, unknown> | null;
+  created_at: string;
+};
+
 const ENGINES = [
   { value: "postgres", label: "PostgreSQL" },
   { value: "mysql", label: "MySQL" },
@@ -71,9 +82,55 @@ function describeError(error: unknown): string {
   return error instanceof Error ? error.message : "Something went wrong.";
 }
 
+function describeEvent(event: AuditEvent, companyNameById: Map<string, string>): string {
+  const who = event.actor_email ?? "Someone";
+  const company = event.company_id ? companyNameById.get(event.company_id) : undefined;
+  const meta = event.metadata ?? {};
+  const suffix = company ? ` — ${company}` : "";
+
+  switch (event.action) {
+    case "connection.created":
+      return `${who} registered database "${meta.name}"${suffix}`;
+    case "connection.deleted":
+      return `${who} removed database "${meta.name}"${suffix}`;
+    case "data_access.updated": {
+      const granted = (meta.granted as string[] | undefined) ?? [];
+      const revoked = (meta.revoked as string[] | undefined) ?? [];
+      const parts: string[] = [];
+      if (granted.length) parts.push(`granted ${granted.join(", ")}`);
+      if (revoked.length) parts.push(`revoked ${revoked.join(", ")}`);
+      return `${who} ${parts.join("; ")}${suffix}`;
+    }
+    case "company.created":
+      return `${who} created company "${meta.name}"`;
+    case "company.updated":
+      return `${who} updated ${company ?? "a company"}`;
+    case "company.deleted":
+      return `${who} deleted company "${meta.name}"`;
+    case "user.created":
+      return `${who} added user ${meta.email}${suffix}`;
+    case "user.updated":
+      return `${who} updated user${suffix}`;
+    case "user.deleted":
+      return `${who} removed user ${meta.email}`;
+    default:
+      return `${who} ${event.action}`;
+  }
+}
+
+function formatTimestamp(iso: string): string {
+  return new Date(iso).toLocaleString(undefined, {
+    month: "short",
+    day: "numeric",
+    hour: "numeric",
+    minute: "2-digit",
+  });
+}
+
 export function DatabaseMappingPage() {
   const [companies, setCompanies] = useState<MappingCompany[]>([]);
   const [tables, setTables] = useState<string[]>([]);
+  const [events, setEvents] = useState<AuditEvent[]>([]);
   const [loading, setLoading] = useState(true);
 
   const [dataAccessTarget, setDataAccessTarget] = useState<MappingCompany | null>(null);
@@ -86,10 +143,15 @@ export function DatabaseMappingPage() {
   const load = useCallback(async () => {
     setLoading(true);
     try {
-      const res = await fetch("/api/database-mapping");
-      const body = await res.json();
-      setCompanies(body.companies ?? []);
-      setTables(body.tables ?? []);
+      const [mappingRes, eventsRes] = await Promise.all([
+        fetch("/api/database-mapping"),
+        fetch("/api/audit-events?limit=30"),
+      ]);
+      const mappingBody = await mappingRes.json();
+      setCompanies(mappingBody.companies ?? []);
+      setTables(mappingBody.tables ?? []);
+      const eventsBody = await eventsRes.json().catch(() => ({}));
+      setEvents(eventsBody.events ?? []);
     } catch (cause) {
       toast.error(describeError(cause));
     } finally {
@@ -159,6 +221,8 @@ export function DatabaseMappingPage() {
       toast.error(body.error ?? "Couldn't remove that database.");
     }
   }
+
+  const companyNameById = new Map(companies.map((c) => [c.company_id, c.company_name]));
 
   return (
     <div className="flex h-svh flex-col">
@@ -237,6 +301,37 @@ export function DatabaseMappingPage() {
                 </CardContent>
               </Card>
             ))
+          )}
+
+          {!loading && (
+            <Card>
+              <CardHeader>
+                <CardTitle>Recent activity</CardTitle>
+                <CardDescription>
+                  Who changed what, and when — connections, table access, and company/user
+                  changes across every company.
+                </CardDescription>
+              </CardHeader>
+              <CardContent>
+                {events.length === 0 ? (
+                  <p className="text-sm text-muted-foreground">No activity recorded yet.</p>
+                ) : (
+                  <ul className="space-y-2">
+                    {events.map((event) => (
+                      <li
+                        key={event.id}
+                        className="flex items-start justify-between gap-3 border-b border-border pb-2 text-sm last:border-0 last:pb-0"
+                      >
+                        <span>{describeEvent(event, companyNameById)}</span>
+                        <span className="shrink-0 text-xs text-muted-foreground">
+                          {formatTimestamp(event.created_at)}
+                        </span>
+                      </li>
+                    ))}
+                  </ul>
+                )}
+              </CardContent>
+            </Card>
           )}
         </div>
       </div>

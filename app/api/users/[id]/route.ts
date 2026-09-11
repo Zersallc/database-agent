@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import bcrypt from "bcryptjs";
 import { prisma } from "@/lib/db";
 import { requireAdminSession } from "@/lib/require-admin";
+import { diffFields, recordAuditEvent } from "@/lib/services/audit";
 
 function serializeUser(user: {
   id: string;
@@ -28,7 +29,7 @@ function serializeUser(user: {
 }
 
 export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
-  const { response } = await requireAdminSession();
+  const { session, response } = await requireAdminSession();
   if (response) return response;
 
   const { id } = await params;
@@ -81,6 +82,20 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
     include: { company: { select: { id: true, name: true } } },
   });
 
+  const { password, ...dataWithoutPassword } = data;
+  const changes = diffFields(existing, dataWithoutPassword);
+  if (password) changes.password = { from: "•••", to: "•••" };
+  if (Object.keys(changes).length > 0) {
+    await recordAuditEvent({
+      actor: session.user,
+      action: "user.updated",
+      targetType: "user",
+      targetId: user.id,
+      companyId: user.companyId,
+      metadata: { changes },
+    });
+  }
+
   return NextResponse.json({ user: serializeUser(user) });
 }
 
@@ -100,5 +115,15 @@ export async function DELETE(_req: NextRequest, { params }: { params: Promise<{ 
   }
 
   await prisma.user.delete({ where: { id } });
+
+  await recordAuditEvent({
+    actor: session.user,
+    action: "user.deleted",
+    targetType: "user",
+    targetId: id,
+    companyId: existing.companyId,
+    metadata: { email: existing.email },
+  });
+
   return NextResponse.json({ ok: true });
 }

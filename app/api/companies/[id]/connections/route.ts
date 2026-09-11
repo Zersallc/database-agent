@@ -3,6 +3,7 @@ import { prisma } from "@/lib/db";
 import { requireAdminSession } from "@/lib/require-admin";
 import { SUPPORTED_ENGINES } from "@/lib/connectors";
 import { createConnection, listConnections, serializeConnection } from "@/lib/services/connections";
+import { recordAuditEvent } from "@/lib/services/audit";
 
 export async function GET(_req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   const { response } = await requireAdminSession();
@@ -17,7 +18,7 @@ export async function GET(_req: NextRequest, { params }: { params: Promise<{ id:
 }
 
 export async function POST(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
-  const { response } = await requireAdminSession();
+  const { session, response } = await requireAdminSession();
   if (response) return response;
 
   const { id } = await params;
@@ -54,6 +55,15 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
     credentials,
     allow_writes: false,
     max_rows: 1000,
+  });
+
+  await recordAuditEvent({
+    actor: session.user,
+    action: "connection.created",
+    targetType: "connection",
+    targetId: connection.id,
+    companyId: id,
+    metadata: { name: connection.name, engine: connection.engine, host: credentials?.host },
   });
 
   return NextResponse.json(serializeConnection(connection), { status: 201 });
