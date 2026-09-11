@@ -33,10 +33,11 @@ export async function GET() {
   const { session, response } = await requireAdminSession();
   if (response) return response;
 
-  // Scoped to the admin's own (or currently switched-to, for Developers)
-  // company — an admin never sees another company's user list.
+  // Developers manage users across every company (filterable by the Company
+  // column in the UI); every other admin only ever sees their own company's.
+  const isDeveloper = session.user.role === "Developer";
   const users = await prisma.user.findMany({
-    where: { companyId: session.user.companyId },
+    where: isDeveloper ? undefined : { companyId: session.user.companyId },
     include: { company: { select: { id: true, name: true } } },
     orderBy: { createdAt: "desc" },
   });

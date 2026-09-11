@@ -17,11 +17,10 @@ export type MappingRow = {
 };
 
 /**
- * Every registered database for the admin's own (or currently switched-to,
- * for Developers) company, one row per table (not per connection) — a
- * database with 4 tables is 4 rows here. Scoped the same way Users is: an
- * admin only ever sees their current company's data, never another
- * company's.
+ * Every registered database, one row per table (not per connection) — a
+ * database with 4 tables is 4 rows here. Developers see every company's at
+ * once (filterable by the Company column in the UI, same pattern as Users);
+ * every other admin only ever sees their own company's.
  *
  * Managed connections (Medi-Merchant's shared Data Access grants) are
  * introspected live, the same as any other connection — the managed
@@ -35,12 +34,14 @@ export async function GET() {
   const { session, response } = await requireAdminSession();
   if (response) return response;
 
-  const companies = session.user.companyId
-    ? await prisma.company.findMany({
-        where: { id: session.user.companyId },
-        orderBy: { name: "asc" },
-      })
-    : [];
+  const isDeveloper = session.user.role === "Developer";
+  const companies =
+    isDeveloper || session.user.companyId
+      ? await prisma.company.findMany({
+          where: isDeveloper ? undefined : { id: session.user.companyId ?? undefined },
+          orderBy: { name: "asc" },
+        })
+      : [];
 
   const rows: MappingRow[] = [];
 
