@@ -2,6 +2,7 @@ import { ApiError } from "@/lib/api/errors";
 import { defineRoute } from "@/lib/api/handler";
 import * as v from "@/lib/api/validate";
 import {
+  getCompanyBranding,
   getReportSettings,
   serializeReportSettings,
   updateReportSettings,
@@ -26,8 +27,11 @@ export const GET = defineRoute({
   scopes: ["report_settings:read"],
   rateLimit: "read",
   handler: async ({ principal }) => {
-    const doc = await getReportSettings(principal.tenantId);
-    return { body: serializeReportSettings(doc) };
+    const [doc, company] = await Promise.all([
+      getReportSettings(principal.tenantId),
+      getCompanyBranding(principal.tenantId),
+    ]);
+    return { body: serializeReportSettings(doc, company) };
   },
 });
 
@@ -53,11 +57,14 @@ export const PATCH = defineRoute({
       }
     }
 
-    const doc = await updateReportSettings(principal.tenantId, {
-      companyName: input.company_name,
-      logoBase64: input.remove_logo ? null : input.logo_base64,
-      logoMimeType: input.remove_logo ? null : input.logo_mime_type,
-    });
-    return { body: serializeReportSettings(doc) };
+    const [doc, company] = await Promise.all([
+      updateReportSettings(principal.tenantId, {
+        companyName: input.company_name,
+        logoBase64: input.remove_logo ? null : input.logo_base64,
+        logoMimeType: input.remove_logo ? null : input.logo_mime_type,
+      }),
+      getCompanyBranding(principal.tenantId),
+    ]);
+    return { body: serializeReportSettings(doc, company) };
   },
 });

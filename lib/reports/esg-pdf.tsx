@@ -12,15 +12,14 @@
 
 import { Document, Page, View, Text, Image, StyleSheet, renderToBuffer } from "@react-pdf/renderer";
 import type { EsgReportData } from "@/lib/services/esg-report";
-import { MediMerchantLogo } from "./logo";
 
 export type ReportBranding = {
   companyName: string;
-  /** data: URL of an uploaded logo. Falls back to the default vector mark when null. */
+  /** data: URL of the company's logo (uploaded here, or inherited from its Company record). No logo image is rendered when null. */
   logoDataUrl: string | null;
 };
 
-const DEFAULT_BRANDING: ReportBranding = { companyName: "Medi Merchant", logoDataUrl: null };
+const DEFAULT_BRANDING: ReportBranding = { companyName: "Workspace", logoDataUrl: null };
 
 const COLORS = {
   ink: "#16241f",
@@ -134,12 +133,8 @@ export function EsgReportDocument({
   return (
     <Document>
       <Page size="A4" style={styles.page}>
-        {branding.logoDataUrl ? (
+        {branding.logoDataUrl && (
           <Image src={branding.logoDataUrl} style={{ height: 22, marginBottom: 4 }} />
-        ) : (
-          <View style={{ marginBottom: 4 }}>
-            <MediMerchantLogo height={16} />
-          </View>
         )}
         <Text style={styles.title}>Monthly ESG, Waste and GHG Report</Text>
 

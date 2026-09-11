@@ -3,10 +3,16 @@ import { requireAdminSession } from "@/lib/require-admin";
 import { listAuditEvents } from "@/lib/services/audit";
 
 export async function GET(req: NextRequest) {
-  const { response } = await requireAdminSession();
+  const { session, response } = await requireAdminSession();
   if (response) return response;
 
-  const companyId = req.nextUrl.searchParams.get("company_id") ?? undefined;
+  // Only a Developer (who can switch between companies) may ask for another
+  // company's log via ?company_id — every other admin is always scoped to
+  // their own, regardless of what's in the query string.
+  const isDeveloper = session.user.role === "Developer";
+  const requestedCompanyId = req.nextUrl.searchParams.get("company_id") ?? undefined;
+  const companyId = isDeveloper ? requestedCompanyId : session.user.companyId ?? undefined;
+
   const limitParam = req.nextUrl.searchParams.get("limit");
   const limit = limitParam ? Number(limitParam) : undefined;
 

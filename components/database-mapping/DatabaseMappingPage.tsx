@@ -9,7 +9,6 @@ import { DataTable } from "@/components/shared/DataTable";
 import { FilterBar, useFilteredData, type FilterConfig } from "@/components/shared/FilterBar";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -71,17 +70,6 @@ type Row = ApiRow & { groupKey: string; groupLabel: string };
 
 type Company = { id: string; name: string };
 
-type AuditEvent = {
-  id: string;
-  actor_email: string | null;
-  action: string;
-  target_type: string;
-  target_id: string | null;
-  company_id: string | null;
-  metadata: Record<string, unknown> | null;
-  created_at: string;
-};
-
 const ENGINES = [
   { value: "postgres", label: "PostgreSQL" },
   { value: "mysql", label: "MySQL" },
@@ -122,42 +110,6 @@ function buildRows(apiRows: ApiRow[]): Row[] {
     );
 }
 
-function describeEvent(event: AuditEvent, companyNameById: Map<string, string>): string {
-  const who = event.actor_email ?? "Someone";
-  const company = event.company_id ? companyNameById.get(event.company_id) : undefined;
-  const meta = event.metadata ?? {};
-  const suffix = company ? ` — ${company}` : "";
-
-  switch (event.action) {
-    case "connection.created":
-      return `${who} registered database "${meta.name}"${suffix}`;
-    case "connection.deleted":
-      return `${who} removed database "${meta.name}"${suffix}`;
-    case "data_access.updated": {
-      const granted = (meta.granted as string[] | undefined) ?? [];
-      const revoked = (meta.revoked as string[] | undefined) ?? [];
-      const parts: string[] = [];
-      if (granted.length) parts.push(`granted ${granted.join(", ")}`);
-      if (revoked.length) parts.push(`revoked ${revoked.join(", ")}`);
-      return `${who} ${parts.join("; ")}${suffix}`;
-    }
-    case "company.created":
-      return `${who} created company "${meta.name}"`;
-    case "company.updated":
-      return `${who} updated ${company ?? "a company"}`;
-    case "company.deleted":
-      return `${who} deleted company "${meta.name}"`;
-    case "user.created":
-      return `${who} added user ${meta.email}${suffix}`;
-    case "user.updated":
-      return `${who} updated user${suffix}`;
-    case "user.deleted":
-      return `${who} removed user ${meta.email}`;
-    default:
-      return `${who} ${event.action}`;
-  }
-}
-
 const FILTER_CONFIG: FilterConfig<Row>[] = [
   { column: "database", label: "Database", type: "enum", getValue: (row) => row.groupLabel },
   { column: "engine", label: "Engine", type: "enum", getValue: (row) => row.connection.engine },
@@ -165,19 +117,9 @@ const FILTER_CONFIG: FilterConfig<Row>[] = [
   { column: "status", label: "Status", type: "enum", getValue: (row) => row.connection.status },
 ];
 
-function formatTimestamp(iso: string): string {
-  return new Date(iso).toLocaleString(undefined, {
-    month: "short",
-    day: "numeric",
-    hour: "numeric",
-    minute: "2-digit",
-  });
-}
-
 export function DatabaseMappingPage() {
   const [apiRows, setApiRows] = useState<ApiRow[]>([]);
   const [companies, setCompanies] = useState<Company[]>([]);
-  const [events, setEvents] = useState<AuditEvent[]>([]);
   const [loading, setLoading] = useState(true);
   const [busyConnectionId, setBusyConnectionId] = useState<string | null>(null);
 
@@ -208,17 +150,14 @@ export function DatabaseMappingPage() {
   const load = useCallback(async () => {
     setLoading(true);
     try {
-      const [mappingRes, companiesRes, eventsRes] = await Promise.all([
+      const [mappingRes, companiesRes] = await Promise.all([
         fetch("/api/database-mapping"),
         fetch("/api/companies"),
-        fetch("/api/audit-events?limit=30"),
       ]);
       const mappingBody = await mappingRes.json();
       setApiRows(mappingBody.rows ?? []);
       const companiesBody = await companiesRes.json().catch(() => ({}));
       setCompanies(companiesBody.companies ?? []);
-      const eventsBody = await eventsRes.json().catch(() => ({}));
-      setEvents(eventsBody.events ?? []);
     } catch (cause) {
       toast.error(describeError(cause));
     } finally {
@@ -585,37 +524,6 @@ export function DatabaseMappingPage() {
         exportFileName="database-mapping"
         emptyMessage="No databases registered yet."
       />
-
-      {!loading && (
-        <Card>
-          <CardHeader>
-            <CardTitle>Recent activity</CardTitle>
-            <CardDescription>
-              Who changed what, and when — connections, table access, and company/user changes
-              across every company.
-            </CardDescription>
-          </CardHeader>
-          <CardContent>
-            {events.length === 0 ? (
-              <p className="text-sm text-muted-foreground">No activity recorded yet.</p>
-            ) : (
-              <ul className="space-y-2">
-                {events.map((event) => (
-                  <li
-                    key={event.id}
-                    className="flex items-start justify-between gap-3 border-b border-border pb-2 text-sm last:border-0 last:pb-0"
-                  >
-                    <span>{describeEvent(event, companyNameById)}</span>
-                    <span className="shrink-0 text-xs text-muted-foreground">
-                      {formatTimestamp(event.created_at)}
-                    </span>
-                  </li>
-                ))}
-              </ul>
-            )}
-          </CardContent>
-        </Card>
-      )}
 
       {dataAccessTarget && (
         <DataAccessDialog

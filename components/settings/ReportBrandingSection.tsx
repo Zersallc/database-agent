@@ -104,7 +104,7 @@ export function ReportBrandingSection() {
         <CardTitle>Report branding</CardTitle>
         <CardDescription>
           The company name and logo shown on generated ESG, Waste and GHG reports (PDF and
-          Excel). Defaults to Medi Merchant's own mark until you upload a different one.
+          Excel). Defaults to your company&apos;s own name and logo until you override it here.
         </CardDescription>
       </CardHeader>
       <CardContent className="space-y-4">
@@ -145,7 +145,7 @@ export function ReportBrandingSection() {
                       className="max-h-full max-w-full object-contain"
                     />
                   ) : (
-                    <span className="text-xs text-muted-foreground">Default Medi Merchant mark</span>
+                    <span className="text-xs text-muted-foreground">No logo set</span>
                   )}
                 </div>
                 <div className="flex flex-col gap-2">

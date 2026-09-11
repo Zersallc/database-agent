@@ -32,7 +32,7 @@ function styleTotal(row: ExcelJS.Row) {
   });
 }
 
-const DEFAULT_BRANDING: ExcelBranding = { companyName: "Medi Merchant", logo: null };
+const DEFAULT_BRANDING: ExcelBranding = { companyName: "Workspace", logo: null };
 
 export async function renderEsgReportExcel(
   data: EsgReportData,

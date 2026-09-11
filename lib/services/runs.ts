@@ -210,35 +210,33 @@ export async function* executeRun(
         const { renderEsgReportPdf } = await import("@/lib/reports/esg-pdf");
         const { renderEsgReportExcel } = await import("@/lib/reports/esg-excel");
         const { createReportFile } = await import("./report-files");
-        const { getReportSettings } = await import("./report-settings");
+        const { getEffectiveBranding } = await import("./report-settings");
 
         const scope = hospitalName
           ? ({ kind: "hospital", hospitalName } as const)
           : ({ kind: "group", hospitalGroup: hospitalGroup! } as const);
-        const [data, reportSettings] = await Promise.all([
+        const [data, branding] = await Promise.all([
           aggregateEsgReport({ scope, year, month }),
-          getReportSettings(tenantId),
+          getEffectiveBranding(tenantId),
         ]);
         const scopeSlug = (hospitalName ?? hospitalGroup ?? "report").replace(/[^a-z0-9]+/gi, "-");
         const periodSlug = month ? `${year}-${String(month).padStart(2, "0")}` : `${year}`;
         const slug = `${scopeSlug}-${periodSlug}`;
 
         const pdfBranding = {
-          companyName: reportSettings.company_name,
+          companyName: branding.companyName,
           logoDataUrl:
-            reportSettings.logo_base64 && reportSettings.logo_mime_type
-              ? `data:${reportSettings.logo_mime_type};base64,${reportSettings.logo_base64}`
+            branding.logoBase64 && branding.logoMimeType
+              ? `data:${branding.logoMimeType};base64,${branding.logoBase64}`
               : null,
         };
         const excelBranding = {
-          companyName: reportSettings.company_name,
+          companyName: branding.companyName,
           logo:
-            reportSettings.logo_base64 && reportSettings.logo_mime_type
+            branding.logoBase64 && branding.logoMimeType
               ? {
-                  base64: reportSettings.logo_base64,
-                  extension: (reportSettings.logo_mime_type === "image/png" ? "png" : "jpeg") as
-                    | "png"
-                    | "jpeg",
+                  base64: branding.logoBase64,
+                  extension: (branding.logoMimeType === "image/png" ? "png" : "jpeg") as "png" | "jpeg",
                 }
               : null,
         };
