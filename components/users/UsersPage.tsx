@@ -384,7 +384,11 @@ export function UsersPage() {
             <div className="grid grid-cols-2 gap-3">
               <div className="space-y-1.5">
                 <Label>Role</Label>
-                <Select value={form.role} onValueChange={(value) => setForm({ ...form, role: value as string })}>
+                <Select
+                  items={{ User: "User", Admin: "Admin", Viewer: "Viewer" }}
+                  value={form.role}
+                  onValueChange={(value) => setForm({ ...form, role: value as string })}
+                >
                   <SelectTrigger className="w-full">
                     <SelectValue />
                   </SelectTrigger>
@@ -398,6 +402,7 @@ export function UsersPage() {
               <div className="space-y-1.5">
                 <Label>Company</Label>
                 <Select
+                  items={{ none: "No company", ...Object.fromEntries(companies.map((c) => [c.id, c.name])) }}
                   value={form.companyId || "none"}
                   onValueChange={(value) => setForm({ ...form, companyId: value === "none" ? "" : (value as string) })}
                 >
