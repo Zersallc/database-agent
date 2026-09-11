@@ -116,23 +116,9 @@ export async function ensureTenant(tenantId: string, name: string): Promise<Tena
     });
   }
 
-  // The sample connection means a fresh workspace can answer a question before
-  // anyone has credentials for a real database.
-  await documents.put("connections", tenantId, {
-    id: newId("connection"),
-    object: "connection",
-    name: "Sample dataset",
-    engine: "demo",
-    status: "connected",
-    status_checked_at: now,
-    status_detail: "Built-in sample data — not a real database.",
-    allow_writes: false,
-    max_rows: 1000,
-    default_schema: null,
-    credential_handle: null,
-    created_at: now,
-    updated_at: now,
-  });
+  // No demo connection seeded here: with multiple real companies now, each
+  // gets its actual database access provisioned through Database Mapping
+  // (Companies > Data access), not a placeholder every workspace starts with.
 
   return tenant;
 }

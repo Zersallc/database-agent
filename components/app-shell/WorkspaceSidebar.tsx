@@ -6,6 +6,7 @@ import { signOut, useSession } from "next-auth/react";
 import {
   BookOpenIcon,
   Building2Icon,
+  DatabaseIcon,
   LogOutIcon,
   MessageSquareIcon,
   PlusIcon,
@@ -41,6 +42,7 @@ const NAV = [
   { href: "/playbook", label: "Playbook", icon: BookOpenIcon },
   { href: "/users", label: "Users", icon: UsersIcon, adminOnly: true },
   { href: "/companies", label: "Companies", icon: Building2Icon, adminOnly: true },
+  { href: "/database-mapping", label: "Database Mapping", icon: DatabaseIcon, adminOnly: true },
   { href: "/settings", label: "Settings", icon: SettingsIcon },
 ];
 
