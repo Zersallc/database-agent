@@ -63,12 +63,33 @@ export type QueryResult = {
   duration_ms: number;
 };
 
+/**
+ * The values a column actually holds, when it holds few enough to name them.
+ *
+ * A column name tells the model that a category exists; it does not tell it how
+ * that category is spelled, and `=` does not forgive the difference. A reader
+ * asking about "health or hygiene hazards" cannot be expected to know the row
+ * says "Health or Hygiene or Ergonomic Hazards", and neither can the model
+ * unless it is shown.
+ */
+export type ColumnValues = {
+  list: string[];
+  /** False when the list is the common values rather than all of them. */
+  complete: boolean;
+};
+
 export type SchemaColumn = {
   name: string;
   data_type: string;
   nullable: boolean;
   primary_key: boolean;
   description: string | null;
+  /**
+   * Optional rather than nullable, unlike the fields above: supplying this at
+   * all depends on the engine having somewhere cheap to read it from, so a
+   * connector that cannot is silent rather than asserting an absence.
+   */
+  distinct_values?: ColumnValues;
 };
 
 export type SchemaTable = {

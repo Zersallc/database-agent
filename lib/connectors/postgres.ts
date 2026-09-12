@@ -106,6 +106,121 @@ const INTROSPECTION_SQL = `
    ORDER BY c.table_schema, c.table_name, c.ordinal_position
 `;
 
+/**
+ * A column holding more distinct values than this is not a category and listing
+ * it would spend the conversation's budget on a dictionary.
+ */
+const MAX_DISTINCT_VALUES = Number(process.env.SCHEMA_MAX_DISTINCT_VALUES ?? 40);
+
+/** Long enough for a real category name, short enough that a stray essay cannot land in the prompt. */
+const MAX_VALUE_LENGTH = 80;
+
+/**
+ * Where the values come from, and why not `SELECT DISTINCT`.
+ *
+ * `pg_stats` is the planner's own sample, already computed by ANALYZE. Reading
+ * it costs one catalog query for the entire database and touches no table, so
+ * this stays free on an instance where `SELECT DISTINCT` on thirty text columns
+ * would be a visit to every heap page. It is also permission-aware: a role only
+ * sees rows for tables it may read, so this cannot leak a column the connection
+ * is not allowed to query.
+ *
+ * The cost is that it is a sample. `n_distinct` is an estimate, and
+ * `most_common_vals` stops at the statistics target, so the list is treated as
+ * complete only when it demonstrably covers every distinct value. A table that
+ * has never been analysed simply yields nothing, which is the right failure:
+ * silence rather than a confident half-list.
+ */
+const COLUMN_VALUES_SQL = `
+  SELECT schemaname,
+         tablename,
+         attname,
+         n_distinct,
+         most_common_vals::text::text[] AS common_values
+    FROM pg_stats
+   WHERE schemaname NOT IN ('pg_catalog', 'information_schema')
+     AND most_common_vals IS NOT NULL
+     AND n_distinct > 0
+     AND n_distinct <= $1
+`;
+
+/** Only text-ish columns: a category is spelled, and a number or a date is not. */
+function holdsText(dataType: string): boolean {
+  return /char|text|citext|enum/i.test(dataType);
+}
+
+/**
+ * Off switch for the whole feature, for a deployment that would rather send
+ * nothing it did not have to.
+ */
+const VALUE_HINTS_ENABLED = process.env.SCHEMA_VALUE_HINTS !== "off";
+
+/** Words that say a column holds people rather than categories. */
+const PERSON_WORDS =
+  /\b(?:person|people|employee|staff|author|owner|assignee|responsible|manager|management|supervisor|superintendent|contact|customer|client|patient|user|username|member|driver|operator|technician|recipient|requester|reporter|approver|signature)\b/;
+
+/** Words that say a column holds a way to reach someone. */
+const CONTACT_WORDS = /\b(?:email|mail|phone|mobile|telephone|tel|fax|address)\b/;
+
+/** "Created by", "Last edited by" — an audit column is a column of people. */
+const ATTRIBUTION = /\b(?:created|edited|updated|modified|submitted|reported|approved|assigned|reviewed|closed|raised)\s+by\b/;
+
+/** A column called "Name", but not "Hospital Name" or "Category Name". */
+const BARE_NAME = /^(?:full |first |last |middle |given |sur)?name$/;
+
+/**
+ * Does this column's *name* say it holds people?
+ *
+ * The shape check below catches an address or a phone number by looking at the
+ * value. It cannot catch a personal name, because "Zohir Kelkouli" and
+ * "Electrical Hazards" are the same shape — two capitalised words. So the
+ * column name is the only signal left, and it is read conservatively: this
+ * errs towards dropping a column that would have been useful, because the
+ * alternative errs towards putting a staff list in front of every question
+ * anyone asks.
+ *
+ * That cost is real and worth naming: "Department Responsible" probably holds
+ * departments, and it is dropped anyway, because "responsible" is not a word
+ * this can afford to read optimistically.
+ */
+export function namesPeople(columnName: string): boolean {
+  const normalized = columnName.toLowerCase().replace(/[^a-z]+/g, " ").trim();
+  return (
+    PERSON_WORDS.test(normalized) ||
+    CONTACT_WORDS.test(normalized) ||
+    ATTRIBUTION.test(normalized) ||
+    BARE_NAME.test(normalized)
+  );
+}
+
+/** An address, a number to call, a URL, a file path. */
+const IDENTIFIER_SHAPES = [
+  /^[^@\s]+@[^@\s]+\.[^@\s]+$/, // email
+  /^\+?[\d][\d\s()-]{6,}$/, // phone
+  /^[a-z][a-z\d+.-]*:\/\//i, // url
+  /^[/\\]|^[a-z]:[/\\]/i, // path
+];
+
+/**
+ * Is this column a set of categories, or a list of people and contact details?
+ *
+ * Both are low-cardinality text, and only one of them belongs in a prompt that
+ * is sent on every turn. A category is worth naming because the reader will
+ * ask for it by an approximate name; an address or a phone number is never
+ * something the reader needs spelled for them, so including it would widen what
+ * leaves this system for no benefit at all.
+ *
+ * This catches the mechanical shapes only. Personal *names* are indistinguishable
+ * from category names to a regular expression, and are deliberately left to the
+ * column allow/deny list rather than guessed at here.
+ */
+export function looksLikeIdentifiers(values: string[]): boolean {
+  const matches = values.filter((value) =>
+    IDENTIFIER_SHAPES.some((shape) => shape.test(value.trim()))
+  );
+  return matches.length * 3 >= values.length;
+}
+
 export class PostgresConnector implements DataSourceConnector {
   readonly engine = "postgres" as const;
   private client: any = null;
@@ -182,7 +297,47 @@ export class PostgresConnector implements DataSourceConnector {
       });
     }
 
+    await this.attachColumnValues(client, tables);
     return [...tables.values()];
+  }
+
+  /**
+   * Best-effort by design. Statistics may be missing, the view may be
+   * restricted, or the cast may not survive an exotic type — and none of that
+   * is worth failing an introspection over, because the schema without value
+   * hints is exactly what this connector returned before them.
+   */
+  private async attachColumnValues(client: any, tables: Map<string, SchemaTable>): Promise<void> {
+    if (!VALUE_HINTS_ENABLED) return;
+
+    let rows: any[];
+    try {
+      const result = await client.query(COLUMN_VALUES_SQL, [MAX_DISTINCT_VALUES]);
+      rows = result.rows;
+    } catch {
+      return;
+    }
+
+    for (const row of rows) {
+      const table = tables.get(`${row.schemaname}.${row.tablename}`);
+      const column = table?.columns.find((c) => c.name === row.attname);
+      if (!column || !holdsText(column.data_type) || namesPeople(column.name)) continue;
+
+      const values: string[] = (row.common_values ?? [])
+        .filter((value: unknown): value is string => typeof value === "string" && value.length > 0)
+        .map((value: string) =>
+          value.length > MAX_VALUE_LENGTH ? `${value.slice(0, MAX_VALUE_LENGTH)}…` : value
+        );
+      if (values.length === 0 || looksLikeIdentifiers(values)) continue;
+
+      // `n_distinct` counts every value; `most_common_vals` stops at the
+      // statistics target. Claiming "one of these" is only honest when the
+      // sample demonstrably reached the whole set.
+      column.distinct_values = {
+        list: values,
+        complete: values.length >= Number(row.n_distinct),
+      };
+    }
   }
 
   async execute(

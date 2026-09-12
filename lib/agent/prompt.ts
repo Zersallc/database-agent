@@ -8,7 +8,7 @@
  * changes per connection. Stable content first means the shared prefix caches.
  */
 
-import type { SchemaTable } from "@/lib/connectors";
+import type { SchemaColumn, SchemaTable } from "@/lib/connectors";
 
 export type ResponseDetail = "concise" | "balanced" | "detailed";
 
@@ -96,6 +96,26 @@ const DETAIL_GUIDANCE: Record<ResponseDetail, string> = {
     "Give the answer, then the reasoning: why this query, what the joins assume, what the caveats are, and what to look at next.",
 };
 
+/**
+ * The values a column holds, written where the model reads the column.
+ *
+ * This is here to remove a guess rather than to add information. Asked about
+ * "health or hygiene hazards", a model that cannot see the values writes the
+ * category the way the question phrased it, `=` matches nothing, and the answer
+ * becomes "there are none" about rows that exist. Spelling it out costs a line
+ * and removes the guess.
+ *
+ * "one of" only when the list is provably every value; otherwise the weaker
+ * claim, because a model that believes a partial list is exhaustive will rule
+ * out the value it should have searched for.
+ */
+function renderValues(column: SchemaColumn): string {
+  const values = column.distinct_values;
+  if (!values?.list.length) return "";
+  const quoted = values.list.map((value) => `'${value.replace(/'/g, "''")}'`).join(", ");
+  return values.complete ? `\n    one of: ${quoted}` : `\n    values include: ${quoted}`;
+}
+
 export function renderSchema(tables: SchemaTable[]): string {
   if (tables.length === 0) {
     return "## Database schema\n\nThe schema could not be read. Say so rather than guessing at table names.";
@@ -114,7 +134,7 @@ export function renderSchema(tables: SchemaTable[]): string {
           ].filter(Boolean);
           const suffix = flags.length ? ` [${flags.join(", ")}]` : "";
           const note = column.description ? ` — ${column.description}` : "";
-          return `- ${column.name}: ${column.data_type}${suffix}${note}`;
+          return `- ${column.name}: ${column.data_type}${suffix}${note}${renderValues(column)}`;
         })
         .join("\n");
       return `${header}${rows}\n${columns}`;

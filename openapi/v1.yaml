@@ -1407,6 +1407,25 @@ components:
                     nullable: { type: boolean }
                     primary_key: { type: boolean }
                     description: { type: [string, "null"] }
+                    distinct_values:
+                      type: object
+                      description: |
+                        The values this column holds, when it holds few enough to
+                        name them. Absent when the engine has no cheap source for
+                        them, when the column is not categorical, or when the
+                        database has no statistics for it yet — so absence means
+                        "not known", never "this column has no values".
+                      required: [list, complete]
+                      properties:
+                        list:
+                          type: array
+                          items: { type: string }
+                        complete:
+                          type: boolean
+                          description: |
+                            True when the list is every distinct value. False when
+                            it is the common ones and rarer values exist, so a
+                            value missing from the list must not be ruled out.
 
     # ------------------------------------------------------------------------
     # Model providers
