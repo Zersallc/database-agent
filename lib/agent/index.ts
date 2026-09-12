@@ -22,6 +22,7 @@ import { ApiError } from "@/lib/api/errors";
 import type { QueryResult, SchemaTable } from "@/lib/connectors";
 import { MissingModuleError } from "@/lib/providers/optional-module";
 import { DEMO_REPLY } from "./demo-reply";
+import { foundNothing, unverifiedFilterNote, unvouchedLiterals, vouchedFrom } from "./evidence";
 import { buildSystemPrompt, type ResponseDetail } from "./prompt";
 import { ModelProviderError } from "./providers";
 import type { ModelClient, ModelMessage, ModelTurn, ToolDefinition } from "./providers";
@@ -157,10 +158,10 @@ function claimsNothingWasFound(text: string): boolean {
  * unbacked ```sql``` block is visibly empty rather than silently wrong, so it
  * does not need forcing.
  *
- * What is still not caught, and is honest to write down: a claim of *absence* —
- * "no observations match that" — carries no figure and promises nothing, so it
- * reads exactly like a grounded answer to this predicate. That one is not a
- * detector's to solve; it needs a claim to carry the query that produced it.
+ * A claim of *absence* — "no observations match that" — carries no figure and
+ * promises nothing, so it reads exactly like a grounded answer here and this
+ * predicate will never catch it. It is handled off the prose entirely, against
+ * the literals the query filtered on; see `evidence.ts`.
  */
 function unbackedAnswerReason(text: string, grounded: string[]): string | null {
   if (/```(table|chart)\b/.test(text)) return "The reply presented data that no query produced.";
@@ -362,7 +363,35 @@ export async function* runAgent(input: AgentRunInput): AsyncGenerator<AgentEvent
    * question which legitimately comes back empty should be able to say so.
    */
   let lastQueryRowCount = 0;
+  /** Whether that result actually found anything — a count of zero did not. */
+  let lastQueryFoundNothing = true;
   let contradictionCorrected = false;
+  /**
+   * Every value this database has shown the model: the schema's value lists,
+   * plus the cells of every result read so far. This is what a filter literal
+   * has to be backed by before an empty result may be called an absence.
+   *
+   * Seeded from the schema rather than left empty, so the common case costs
+   * nothing — with value hints in the prompt the model usually filters on a
+   * spelling that is already in here, and the check stays silent.
+   */
+  const vouched = new Set<string>();
+  for (const connection of input.connections) {
+    for (const table of connection.schema ?? []) {
+      for (const column of table.columns) {
+        for (const value of column.distinct_values?.list ?? []) {
+          vouched.add(value.trim().toLowerCase());
+        }
+      }
+    }
+  }
+  /**
+   * Literals from the most recent query that came back empty, when nothing
+   * vouched for them. Overwritten by each query rather than accumulated: the
+   * claim an answer makes is about the last thing it looked at.
+   */
+  let unverifiedAbsence: string[] | null = null;
+  let absenceCorrected = false;
   /**
    * Everywhere a figure in an answer could legitimately have come from. The
    * retry only looks at turns that called no tool, so this is the question and
@@ -466,7 +495,10 @@ export async function* runAgent(input: AgentRunInput): AsyncGenerator<AgentEvent
          * turn above it. This is not a detector's guess about phrasing: the
          * claim is checked against what the last query really returned, so it
          * only fires on a contradiction, and a legitimate "none of them are
-         * overdue" reports a query that came back empty and is untouched.
+         * overdue" reports a query that came back empty and is untouched. A
+         * count of zero is one such query — one row by the row count, nothing
+         * at all to the reader — and `foundNothing` is what keeps this branch
+         * from insisting the data is there on the strength of it.
          *
          * The remedy is not `tool_choice: "required"` — the data has already
          * been fetched and asking again would only fetch it twice. The model is
@@ -474,7 +506,7 @@ export async function* runAgent(input: AgentRunInput): AsyncGenerator<AgentEvent
          * The correction lives in this run's `messages` only; stored history is
          * rebuilt from the conversation, so nothing synthetic is persisted.
          */
-        if (!contradictionCorrected && lastQueryRowCount > 0 && claimsNothingWasFound(answer)) {
+        if (!contradictionCorrected && !lastQueryFoundNothing && claimsNothingWasFound(answer)) {
           contradictionCorrected = true;
           yield emit({
             label: "Said nothing was found when rows came back — retrying",
@@ -487,6 +519,47 @@ export async function* runAgent(input: AgentRunInput): AsyncGenerator<AgentEvent
             content:
               `Your last query returned ${lastQueryRowCount} row${lastQueryRowCount === 1 ? "" : "s"}, so the data is there. ` +
               `Answer from those rows and quote what they say. Do not report that nothing was found.`,
+          });
+          answer = "";
+          yield { type: "reset" };
+          continue;
+        }
+
+        /**
+         * The answer reports an absence, and the empty result behind it came
+         * from a value nothing vouches for. This is the case the branch above
+         * cannot see: there is no contradiction to catch, because the query
+         * really did return nothing — it just asked the wrong question.
+         *
+         * Forced, unlike the contradiction: that one already had its rows and
+         * only needed to read them, while this one is missing the lookup it
+         * never did. The tool is made mandatory so the next turn goes and finds
+         * what the column holds instead of restating the same empty answer.
+         *
+         * Once. If the model checks and the value genuinely is not there, its
+         * second answer says so and is accepted — an absence that has been
+         * verified is exactly what this is trying to produce, not something to
+         * keep arguing with.
+         */
+        if (!absenceCorrected && unverifiedAbsence && claimsNothingWasFound(answer)) {
+          const quoted = unverifiedAbsence.map((value) => `'${value}'`).join(", ");
+          absenceCorrected = true;
+          toolChoice = "required";
+          yield emit({
+            label: "Reported an absence on an unverified value — retrying",
+            status: "done",
+            detail: `Nothing in the schema or in this conversation shows that ${quoted} exists.`,
+            query_id: null,
+          });
+          messages.push({
+            role: "user",
+            content:
+              `You are reporting that nothing was found, but the query that came back empty filtered on ` +
+              `${quoted}, which is your own spelling — nothing in the schema or in this conversation shows ` +
+              `the database holds that value. Find out what the column really contains before answering: ` +
+              `SELECT DISTINCT on it, or a case-insensitive LIKE on a distinctive fragment. If a close value ` +
+              `exists, query it and answer from those rows. If the column genuinely has nothing like it, say ` +
+              `that and say what it does hold.`,
           });
           answer = "";
           yield { type: "reset" };
@@ -633,6 +706,13 @@ export async function* runAgent(input: AgentRunInput): AsyncGenerator<AgentEvent
         try {
           const { queryId, result } = await target.execute(sql);
           lastQueryRowCount = result.row_count;
+          lastQueryFoundNothing = foundNothing(result.rows, result.row_count);
+          // Only a result that found nothing raises the question at all, and it
+          // is answered against what was known before this query ran; whatever
+          // it returned is folded in afterwards, for the queries that follow.
+          const unvouched = lastQueryFoundNothing ? unvouchedLiterals(sql, vouched) : [];
+          unverifiedAbsence = unvouched.length > 0 ? unvouched : null;
+          for (const value of vouchedFrom(result.rows)) vouched.add(value);
           yield emit({
             label: purpose || "Ran query",
             status: "done",
@@ -643,7 +723,7 @@ export async function* runAgent(input: AgentRunInput): AsyncGenerator<AgentEvent
             role: "tool",
             toolCallId: call.id,
             toolName: call.name,
-            content: JSON.stringify(summarize(result, sql)),
+            content: JSON.stringify(summarize(result, sql, unvouched)),
             isError: false,
           });
         } catch (error) {
@@ -736,7 +816,7 @@ function samplingNote(sql: string, result: QueryResult): string | null {
   return null;
 }
 
-function summarize(result: QueryResult, sql: string) {
+function summarize(result: QueryResult, sql: string, unvouched: string[] = []) {
   const sampling = samplingNote(sql, result);
   return {
     columns: result.columns.map((column) => column.name),
@@ -746,6 +826,7 @@ function summarize(result: QueryResult, sql: string) {
     truncated: result.truncated || result.rows.length > ROWS_IN_CONTEXT,
     duration_ms: result.duration_ms,
     ...(sampling ? { sampling } : {}),
+    ...(unvouched.length ? { unverified_filter: unverifiedFilterNote(unvouched) } : {}),
   };
 }
 
