@@ -60,9 +60,19 @@ export type AgentEvent =
     }
   | { type: "failed"; error: ApiError; steps: AgentStep[] };
 
-/** Fenced blocks are the model's own composition, not a claim about the data. */
+/**
+ * What the reader is actually being told.
+ *
+ * Fenced blocks are the model's own composition rather than a claim about the
+ * data, and a reasoning block is the model talking to itself — "no rows, so
+ * let me widen the match" is thinking its way to the right answer, not
+ * asserting an absence. Weighing either as a claim makes the checks below fire
+ * on turns that went on to be correct.
+ */
 function withoutFencedBlocks(text: string): string {
-  return text.replace(/```[\s\S]*?(?:```|$)/g, " ");
+  return text
+    .replace(/<think>[\s\S]*?(?:<\/think>|$)/gi, " ")
+    .replace(/```[\s\S]*?(?:```|$)/g, " ");
 }
 
 /**
@@ -111,6 +121,20 @@ function statesUngroundedFigure(text: string, grounded: string[]): boolean {
  */
 function promisesAnActionItDidNotTake(text: string): boolean {
   return /\b(?:I['’]ll|I will|let me|I['’]m going to|going to)\b[^.!?\n]{0,60}\b(?:run|execute|query|querying|check|retrieve|fetch|pull|look)\b/i.test(
+    withoutFencedBlocks(text)
+  );
+}
+
+/**
+ * Does this answer report that nothing was found?
+ *
+ * On its own this is the same unbounded phrase-matching the rest of this file
+ * avoids, and it is only used cross-checked against the rows the last query
+ * actually returned. That check is what makes it safe: the pattern alone
+ * guesses, the pattern against a row count contradicts.
+ */
+function claimsNothingWasFound(text: string): boolean {
+  return /\bno (?:observations?|rows|records|results|entries|data|matches|matching)\b|\bnone (?:were|was) found\b|\bnothing (?:was )?found\b|\bnot found\b|\bno such\b/i.test(
     withoutFencedBlocks(text)
   );
 }
@@ -333,6 +357,13 @@ export async function* runAgent(input: AgentRunInput): AsyncGenerator<AgentEvent
   let forcedRetryUsed = false;
   let toolChoice: "auto" | "required" = "auto";
   /**
+   * Rows the most recent successful query returned. The *last* one rather than
+   * the run's total on purpose: a turn that finds rows and then asks a narrower
+   * question which legitimately comes back empty should be able to say so.
+   */
+  let lastQueryRowCount = 0;
+  let contradictionCorrected = false;
+  /**
    * Everywhere a figure in an answer could legitimately have come from. The
    * retry only looks at turns that called no tool, so this is the question and
    * the conversation so far and nothing else: stored history carries no tool
@@ -425,6 +456,38 @@ export async function* runAgent(input: AgentRunInput): AsyncGenerator<AgentEvent
           // asked the original question again rather than shown its own bad
           // answer — which it would otherwise imitate, the same self-imitation
           // that caused this.
+          answer = "";
+          yield { type: "reset" };
+          continue;
+        }
+
+        /**
+         * The answer says nothing was found while the rows are sitting in the
+         * turn above it. This is not a detector's guess about phrasing: the
+         * claim is checked against what the last query really returned, so it
+         * only fires on a contradiction, and a legitimate "none of them are
+         * overdue" reports a query that came back empty and is untouched.
+         *
+         * The remedy is not `tool_choice: "required"` — the data has already
+         * been fetched and asking again would only fetch it twice. The model is
+         * told the count instead, which is the one fact it is contradicting.
+         * The correction lives in this run's `messages` only; stored history is
+         * rebuilt from the conversation, so nothing synthetic is persisted.
+         */
+        if (!contradictionCorrected && lastQueryRowCount > 0 && claimsNothingWasFound(answer)) {
+          contradictionCorrected = true;
+          yield emit({
+            label: "Said nothing was found when rows came back — retrying",
+            status: "done",
+            detail: `The last query returned ${lastQueryRowCount} row${lastQueryRowCount === 1 ? "" : "s"}.`,
+            query_id: null,
+          });
+          messages.push({
+            role: "user",
+            content:
+              `Your last query returned ${lastQueryRowCount} row${lastQueryRowCount === 1 ? "" : "s"}, so the data is there. ` +
+              `Answer from those rows and quote what they say. Do not report that nothing was found.`,
+          });
           answer = "";
           yield { type: "reset" };
           continue;
@@ -569,6 +632,7 @@ export async function* runAgent(input: AgentRunInput): AsyncGenerator<AgentEvent
 
         try {
           const { queryId, result } = await target.execute(sql);
+          lastQueryRowCount = result.row_count;
           yield emit({
             label: purpose || "Ran query",
             status: "done",

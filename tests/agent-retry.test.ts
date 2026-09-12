@@ -63,6 +63,53 @@ const connection = {
   }),
 };
 
+/** A connection whose queries return `rowCount` rows, in call order. */
+function connectionReturning(...rowCounts: number[]) {
+  let call = 0;
+  return {
+    id: "conn_rows",
+    name: "Test",
+    engine: "postgres",
+    schema: null,
+    execute: async () => {
+      const row_count = rowCounts[Math.min(call, rowCounts.length - 1)];
+      call += 1;
+      return {
+        queryId: `qry_${call}`,
+        result: {
+          columns: [{ name: "n", data_type: "text" }],
+          rows: Array.from({ length: row_count }, (_, i) => [`row ${i}`]),
+          row_count,
+          truncated: false,
+          duration_ms: 1,
+        },
+      };
+    },
+  };
+}
+
+async function runWith(
+  conn: ReturnType<typeof connectionReturning>,
+  turns: { text: string; toolCalls?: ToolCall[] }[],
+  question = "what is under that category?"
+) {
+  const client = scriptedClient(turns);
+  const events: AgentEvent[] = [];
+  for await (const event of runAgent({
+    question,
+    history: [],
+    playbookContext: "",
+    responseDetail: "balanced",
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    connections: [conn as any],
+    client,
+    reportGenerator: null,
+  })) {
+    events.push(event);
+  }
+  return { events, client };
+}
+
 async function run(
   turns: { text: string; toolCalls?: ToolCall[] }[],
   question = "show me the plan mix",
@@ -193,6 +240,82 @@ describe("a figure with nothing behind it", () => {
       "write me that query, do not run it"
     );
     assert.equal(client.requests.length, 1, "a fenced block is composition, not a claim");
+  });
+});
+
+/**
+ * The answer contradicting the rows it just fetched. Checked against the real
+ * row count rather than guessed at, so the "does not fire" cases below are the
+ * ones that keep a legitimate empty finding sayable.
+ */
+describe("saying nothing was found while holding rows", () => {
+  const query: ToolCall[] = [{ id: "c1", name: "run_sql", input: { sql: "SELECT 1" } }];
+
+  test("three rows back and 'no observations were found' is corrected", async () => {
+    const { client, events } = await runWith(connectionReturning(3), [
+      { text: "", toolCalls: query },
+      { text: "No observations were found for that sub-classification." },
+      { text: "Three rows came back; here is what they say." },
+    ]);
+    assert.equal(client.requests.length, 3, "the contradiction should be put back to the model");
+    assert.ok(
+      events.some((e) => e.type === "reset"),
+      "the contradicted answer must be withdrawn"
+    );
+    const correction = client.requests[2].messages.at(-1);
+    assert.equal(correction?.role, "user");
+    assert.match(String(correction?.content), /returned 3 rows/);
+  });
+
+  test("the forcing is not used for it — the rows are already in hand", async () => {
+    const { client } = await runWith(connectionReturning(3), [
+      { text: "", toolCalls: query },
+      { text: "No matching records." },
+      { text: "Here they are." },
+    ]);
+    assert.equal(client.requests[2].toolChoice, "auto", "re-querying would fetch the same rows twice");
+  });
+
+  test("an empty result really may be reported as empty", async () => {
+    const { client } = await runWith(connectionReturning(0), [
+      { text: "", toolCalls: query },
+      { text: "No observations were found for that sub-classification." },
+    ]);
+    assert.equal(client.requests.length, 2, "nothing to contradict when nothing came back");
+  });
+
+  test("a narrower follow-up that comes back empty is still sayable", async () => {
+    // Rows first, then a tighter question that legitimately matches none.
+    const { client } = await runWith(connectionReturning(12, 0), [
+      { text: "", toolCalls: query },
+      { text: "", toolCalls: [{ id: "c2", name: "run_sql", input: { sql: "SELECT 2" } }] },
+      { text: "Twelve are open, and no records are overdue." },
+    ]);
+    assert.equal(client.requests.length, 3, "the last query is the one the claim is about");
+  });
+
+  test("reasoning that worked its way to the answer is not the answer", async () => {
+    // Qwen-style models emit <think>…</think> inline. "No rows, so let me widen
+    // it" is the model reaching the right answer, not telling the reader
+    // nothing is there.
+    const { client } = await runWith(connectionReturning(3), [
+      { text: "", toolCalls: query },
+      {
+        text:
+          "<think>The exact match gave no results, so I widened it and got three.</think>" +
+          "Three observations are under that sub-classification.",
+      },
+    ]);
+    assert.equal(client.requests.length, 2, "thinking is not an assertion to the reader");
+  });
+
+  test("the correction is spent once", async () => {
+    const { client } = await runWith(connectionReturning(3), [
+      { text: "", toolCalls: query },
+      { text: "No results found." },
+      { text: "Still no results found." },
+    ]);
+    assert.equal(client.requests.length, 3, "one correction, then accept the answer");
   });
 });
 
