@@ -65,13 +65,14 @@ const connection = {
 
 async function run(
   turns: { text: string; toolCalls?: ToolCall[] }[],
-  question = "show me the plan mix"
+  question = "show me the plan mix",
+  history: { role: "user" | "assistant"; content: string }[] = []
 ) {
   const client = scriptedClient(turns);
   const events: AgentEvent[] = [];
   for await (const event of runAgent({
     question,
-    history: [],
+    history,
     playbookContext: "",
     responseDetail: "balanced",
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -139,5 +140,74 @@ describe("the forced-tool retry", () => {
       { text: '```table\n{"columns":["a"],"rows":[[2]]}\n```' },
     ]);
     assert.equal(client.requests.length, 2, "one forced attempt, then accept the answer");
+  });
+});
+
+/**
+ * Prose fabrication, which the fenced-block check above cannot see. The rule is
+ * about substance rather than shape: a figure is grounded when the model could
+ * have read it somewhere, and invented when it could not.
+ */
+describe("a figure with nothing behind it", () => {
+  test("a count stated in prose with no query is retried", async () => {
+    const { client } = await run([
+      { text: "In August there were 52 unsafe conditions and 45 quality observations." },
+    ]);
+    assert.equal(client.requests.length, 2, "a figure from nowhere is still fabrication");
+    assert.equal(client.requests[1].toolChoice, "required");
+  });
+
+  test("a figure the reader supplied is not fabrication", async () => {
+    const { client } = await run(
+      [{ text: "Yes — 52 is the count you mentioned; I have not checked it." }],
+      "is 52 the right number of unsafe conditions?"
+    );
+    assert.equal(client.requests.length, 1, "it came from the question");
+  });
+
+  test("a figure an earlier turn established is not re-chased", async () => {
+    // The summarise-what-we-just-found turn. Forcing a query here would re-run
+    // work the conversation already did.
+    const { client } = await run(
+      [{ text: "Unsafe Condition at 52 leads, with Quality and CI at 45 behind it." }],
+      "summarize those risks",
+      [
+        { role: "user", content: "what are the risk types for August?" },
+        { role: "assistant", content: "Unsafe Condition 52, Quality and CI 45 — both in the table." },
+      ]
+    );
+    assert.equal(client.requests.length, 1, "the figures were already on the record");
+  });
+
+  test("a numbered list is numbering, not a quantity", async () => {
+    const { client } = await run([
+      { text: "Two things to know:\n\n1. The schema has no weight column.\n2. Ask the owner." },
+    ]);
+    assert.equal(client.requests.length, 1, "list markers must not read as figures");
+  });
+
+  test("numbers inside a query the user asked for do not count", async () => {
+    // Same false positive the withdrawn retry died on, now via the figure rule.
+    const { client } = await run(
+      [{ text: "Sure:\n```sql\nSELECT * FROM t WHERE id = 52 LIMIT 10;\n```" }],
+      "write me that query, do not run it"
+    );
+    assert.equal(client.requests.length, 1, "a fenced block is composition, not a claim");
+  });
+});
+
+describe("a promise to run a query", () => {
+  test("announcing a query and then stopping is retried", async () => {
+    const { client } = await run([{ text: "I will run a query to get those details for you." }]);
+    assert.equal(client.requests.length, 2, "a promise is not an answer");
+    assert.equal(client.requests[1].toolChoice, "required");
+  });
+
+  test("a closing offer is not a promise to query", async () => {
+    const { client } = await run(
+      [{ text: "That column is not in the schema. Let me know if you want something else." }],
+      "what does the weight column hold?"
+    );
+    assert.equal(client.requests.length, 1, "'let me know' reaches no database");
   });
 });

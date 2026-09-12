@@ -60,8 +60,64 @@ export type AgentEvent =
     }
   | { type: "failed"; error: ApiError; steps: AgentStep[] };
 
+/** Fenced blocks are the model's own composition, not a claim about the data. */
+function withoutFencedBlocks(text: string): string {
+  return text.replace(/```[\s\S]*?(?:```|$)/g, " ");
+}
+
 /**
- * Did this turn present data that no query produced?
+ * Every number a reader would take as a figure, normalized for comparison.
+ *
+ * Ordered-list markers are stripped first: "1. Health hazards" is numbering, not
+ * a quantity, and counting it would retry every enumerated answer ever written.
+ * Thousands separators go so that 52,410 in prose matches 52410 in a tool
+ * result — the same figure formatted for a person rather than for JSON.
+ */
+function figuresIn(text: string): string[] {
+  const prose = withoutFencedBlocks(text).replace(/^[ \t]*\d+[.)]\s/gm, " ");
+  return (prose.match(/\d[\d,]*(?:\.\d+)?/g) ?? []).map((n) => n.replace(/,/g, ""));
+}
+
+/**
+ * Did this turn state a figure that appears nowhere it could have come from?
+ *
+ * This is the predicate the previous version of this file said nobody had
+ * written. It works on substance rather than on shape: a figure is grounded if
+ * the model could have read it — from the question, from an earlier turn, or
+ * from a tool result this run — and invented if it could not. That holds however
+ * the sentence is phrased, so a new way of wording a fabrication does not need a
+ * new pattern here.
+ *
+ * It only runs when the turn called no tool at all, so "queried, then
+ * summarised" is never touched.
+ */
+function statesUngroundedFigure(text: string, grounded: string[]): boolean {
+  const stated = figuresIn(text);
+  if (stated.length === 0) return false;
+  const available = new Set(grounded.flatMap((source) => figuresIn(source)));
+  return stated.some((figure) => !available.has(figure));
+}
+
+/**
+ * Did this turn promise to act and then stop?
+ *
+ * "I will run a query to get that" followed by no tool call is not an answer;
+ * it is the model narrating a plan and ending its turn, and the reader is left
+ * watching a promise. Asking again with the tool mandatory is exactly the nudge
+ * that turns it into the query it said it would run.
+ *
+ * Deliberately narrow: the verb has to be one that reaches the database, so
+ * "let me know if…" and "I'll explain why…" are untouched.
+ */
+function promisesAnActionItDidNotTake(text: string): boolean {
+  return /\b(?:I['’]ll|I will|let me|I['’]m going to|going to)\b[^.!?\n]{0,60}\b(?:run|execute|query|querying|check|retrieve|fetch|pull|look)\b/i.test(
+    withoutFencedBlocks(text)
+  );
+}
+
+/**
+ * Why this turn should be asked again with the tool made mandatory, or null to
+ * accept it as it stands.
  *
  * ```table``` and ```chart``` are *results*. Emitting one without having called
  * a tool means the numbers in it came from the model, and nothing downstream
@@ -77,12 +133,20 @@ export type AgentEvent =
  * unbacked ```sql``` block is visibly empty rather than silently wrong, so it
  * does not need forcing.
  *
- * Prose fabrication — "Free 15 · Pro 20 · Enterprise 10" in a sentence — is not
- * caught here and cannot be, without a predicate for "asserted a quantity
- * without a query" that nobody has yet written.
+ * What is still not caught, and is honest to write down: a claim of *absence* —
+ * "no observations match that" — carries no figure and promises nothing, so it
+ * reads exactly like a grounded answer to this predicate. That one is not a
+ * detector's to solve; it needs a claim to carry the query that produced it.
  */
-function presentsUnbackedData(text: string): boolean {
-  return /```(table|chart)\b/.test(text);
+function unbackedAnswerReason(text: string, grounded: string[]): string | null {
+  if (/```(table|chart)\b/.test(text)) return "The reply presented data that no query produced.";
+  if (statesUngroundedFigure(text, grounded)) {
+    return "The reply stated a figure that no query in this conversation produced.";
+  }
+  if (promisesAnActionItDidNotTake(text)) {
+    return "The reply said it would run a query and then did not.";
+  }
+  return null;
 }
 
 export type AgentConnection = {
@@ -157,7 +221,10 @@ function buildRunSqlTool(connections: AgentConnection[]): ToolDefinition {
           `assuming a table lives on the wrong one. `
         : "Run a read-only SQL query against the connected database and get the rows back. ") +
       "Call this before stating any figure — never answer from memory or from the schema alone. " +
-      "One statement per call. If it errors, read the message, fix the query, and call again.",
+      "One statement per call. If it errors, read the message, fix the query, and call again. " +
+      "If a filter value came from the reader's wording rather than from a result you have seen, " +
+      "look the real value up before trusting an empty answer: no rows means this query matched " +
+      "nothing, not that nothing is there.",
     parameters: {
       type: "object",
       properties: {
@@ -265,6 +332,15 @@ export async function* runAgent(input: AgentRunInput): AsyncGenerator<AgentEvent
   let toolCallsMade = 0;
   let forcedRetryUsed = false;
   let toolChoice: "auto" | "required" = "auto";
+  /**
+   * Everywhere a figure in an answer could legitimately have come from. The
+   * retry only looks at turns that called no tool, so this is the question and
+   * the conversation so far and nothing else: stored history carries no tool
+   * results (see `messages` above), which means a number recalled from a past
+   * turn counts as grounded only if that turn said it out loud — the same
+   * standard the reader was held to.
+   */
+  const grounded = [input.question, ...input.history.map((message) => message.content)];
   let inputTokens = 0;
   let outputTokens = 0;
 
@@ -331,18 +407,18 @@ export async function* runAgent(input: AgentRunInput): AsyncGenerator<AgentEvent
          *   no query even when a tool is mandatory, that is a different failure
          *   and looping on it would only cost tokens.
          */
-        if (
-          !forcedRetryUsed &&
-          toolCallsMade === 0 &&
-          tools.length > 0 &&
-          presentsUnbackedData(answer)
-        ) {
+        const unbacked =
+          !forcedRetryUsed && toolCallsMade === 0 && tools.length > 0
+            ? unbackedAnswerReason(answer, grounded)
+            : null;
+
+        if (unbacked) {
           forcedRetryUsed = true;
           toolChoice = "required";
           yield emit({
             label: "Answered without running a query — retrying",
             status: "done",
-            detail: "The reply presented data that no query produced.",
+            detail: unbacked,
             query_id: null,
           });
           // Nothing was appended to `messages` on this path, so the model is
