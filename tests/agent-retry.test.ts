@@ -522,6 +522,141 @@ describe("reporting an absence on a value nothing vouched for", () => {
   });
 });
 
+/**
+ * A text column filtered with a date range. Valid SQL — the engine just
+ * compares strings lexically — so nothing here errors, and the query 2
+ * failure from the September-2026-journeys run is exactly this: a location
+ * column compared to a date-shaped literal, returning a confident, wrong
+ * count instead of the error a genuinely bad column name would raise.
+ */
+describe("a text column compared to a date-shaped literal with a range", () => {
+  const schema = [
+    {
+      schema: "public",
+      name: "Journey Register",
+      description: null,
+      row_estimate: null,
+      columns: [
+        { name: "Departure Point", data_type: "text", nullable: true, primary_key: false, description: null },
+        { name: "Departure Date", data_type: "date", nullable: true, primary_key: false, description: null },
+      ],
+    },
+  ];
+
+  function mismatched(): ToolCall[] {
+    return [
+      {
+        id: "c1",
+        name: "run_sql",
+        input: {
+          sql:
+            `SELECT COUNT(*) FROM "Journey Register" WHERE "Departure Point" >= '2026-09-01' ` +
+            `AND "Departure Point" < '2026-10-01'`,
+        },
+      },
+    ];
+  }
+
+  test("the answer is retried, with the tool made mandatory", async () => {
+    const conn = { ...connectionCounting(0), schema };
+    const { client, events } = await runWith(conn, [
+      { text: "", toolCalls: mismatched() },
+      { text: "There are 0 journeys recorded in September 2026." },
+      {
+        text: "",
+        toolCalls: [
+          {
+            id: "c2",
+            name: "run_sql",
+            input: {
+              sql:
+                `SELECT COUNT(*) FROM "Journey Register" WHERE "Departure Date" >= '2026-09-01' ` +
+                `AND "Departure Date" < '2026-10-01'`,
+            },
+          },
+        ],
+      },
+      { text: "There are 42 journeys in September 2026." },
+    ]);
+    assert.equal(client.requests.length, 4, "a wrong-column comparison should not be the final answer");
+    assert.equal(client.requests[2].toolChoice, "required", "the correct column is the point");
+    assert.ok(events.some((e) => e.type === "reset"), "the wrong answer must be withdrawn");
+    assert.match(String(client.requests[2].messages.at(-1)?.content), /Departure Point/);
+  });
+
+  test("the warning is in the tool result where the model is already reading", async () => {
+    const conn = { ...connectionCounting(0), schema };
+    const { client } = await runWith(conn, [
+      { text: "", toolCalls: mismatched() },
+      { text: "There are 0 journeys." },
+    ]);
+    const toolResult = client.requests[1].messages.find((message) => message.role === "tool");
+    assert.match(String(toolResult?.content), /column_type_warning/);
+    assert.match(String(toolResult?.content), /Departure Date/, "the real date column should be suggested");
+  });
+
+  test("fires even when the wrong-column count looks plausible, not just on zero", async () => {
+    const conn = { ...connectionCounting(5), schema };
+    const { client } = await runWith(conn, [
+      { text: "", toolCalls: mismatched() },
+      { text: "There are 5 journeys in September 2026." },
+    ]);
+    assert.equal(client.requests.length, 3, "the mismatch is retried regardless of what the count says");
+    assert.equal(client.requests[2].toolChoice, "required");
+  });
+
+  test("a real date column compared the same way is left alone", async () => {
+    const conn = { ...connectionCounting(0), schema };
+    const { client } = await runWith(conn, [
+      {
+        text: "",
+        toolCalls: [
+          {
+            id: "c1",
+            name: "run_sql",
+            input: {
+              sql:
+                `SELECT COUNT(*) FROM "Journey Register" WHERE "Departure Date" >= '2026-09-01' ` +
+                `AND "Departure Date" < '2026-10-01'`,
+            },
+          },
+        ],
+      },
+      { text: "There are 0 journeys in September 2026." },
+    ]);
+    assert.equal(client.requests.length, 2, "the date column is the right one to filter on");
+  });
+
+  test("an equality comparison is not treated as the range mistake", async () => {
+    const conn = { ...connectionCounting(0), schema };
+    const { client } = await runWith(conn, [
+      {
+        text: "",
+        toolCalls: [
+          {
+            id: "c1",
+            name: "run_sql",
+            input: { sql: `SELECT COUNT(*) FROM "Journey Register" WHERE "Departure Point" = '2026-09-01'` },
+          },
+        ],
+      },
+      { text: "No journeys matched." },
+    ]);
+    assert.equal(client.requests.length, 2, "= is not the BETWEEN/range mistake this check targets");
+  });
+
+  test("the correction is spent once", async () => {
+    const conn = { ...connectionCounting(0), schema };
+    const { client } = await runWith(conn, [
+      { text: "", toolCalls: mismatched() },
+      { text: "0 journeys." },
+      { text: "", toolCalls: mismatched() },
+      { text: "Still 0 journeys." },
+    ]);
+    assert.equal(client.requests.length, 4, "one correction, then the answer stands");
+  });
+});
+
 describe("a promise to run a query", () => {
   test("announcing a query and then stopping is retried", async () => {
     const { client } = await run([{ text: "I will run a query to get those details for you." }]);

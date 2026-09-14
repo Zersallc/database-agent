@@ -440,6 +440,14 @@ export async function* runAgent(input: AgentRunInput): AsyncGenerator<AgentEvent
   let lastQueryFoundNothing = true;
   let contradictionCorrected = false;
   /**
+   * Set when the most recent query compared a text column to a date-shaped
+   * literal with a range — see `dateColumnMismatchNote`. Overwritten by each
+   * query, same as `lastQueryFoundNothing`: this is a claim about the query
+   * the answer is actually resting on, not a history of every query run.
+   */
+  let lastQueryTypeMismatch: string | null = null;
+  let typeMismatchCorrected = false;
+  /**
    * Every value this database has shown the model: the schema's value lists,
    * plus the cells of every result read so far. This is what a filter literal
    * has to be backed by before an empty result may be called an absence.
@@ -664,6 +672,40 @@ export async function* runAgent(input: AgentRunInput): AsyncGenerator<AgentEvent
           continue;
         }
 
+        /**
+         * The answer rests on a query that filtered a text column with a
+         * date-shaped range — see `dateColumnMismatchNote`. Unlike the
+         * absence case above, this does not wait for the answer to claim
+         * nothing was found: a wrong-column comparison can just as easily
+         * land on a plausible nonzero number, and the mistake is invisible
+         * in the prose either way. It is forced rather than left to the
+         * model's own judgment because this is exactly the self-check a
+         * reasoning pass would normally catch, and with `enableThinking` off
+         * there is no reasoning pass for it to happen in.
+         *
+         * Once. If the model reruns against the real date column and the
+         * number holds, or it has a real reason the comparison is fine on
+         * this schema, that answer is accepted rather than argued with twice.
+         */
+        if (!typeMismatchCorrected && lastQueryTypeMismatch) {
+          typeMismatchCorrected = true;
+          toolChoice = "required";
+          yield emit({
+            label: "Queried a text column with a date range — retrying",
+            status: "done",
+            detail: lastQueryTypeMismatch,
+            query_id: null,
+          });
+          messages.push({
+            role: "user",
+            content: `${lastQueryTypeMismatch} Rerun against the correct column before answering.`,
+          });
+          answer = "";
+          reasoning = "";
+          yield { type: "reset" };
+          continue;
+        }
+
         yield {
           type: "completed",
           content: answer.trim(),
@@ -811,6 +853,7 @@ export async function* runAgent(input: AgentRunInput): AsyncGenerator<AgentEvent
           // it returned is folded in afterwards, for the queries that follow.
           const unvouched = lastQueryFoundNothing ? unvouchedLiterals(sql, vouched) : [];
           unverifiedAbsence = unvouched.length > 0 ? unvouched : null;
+          lastQueryTypeMismatch = dateColumnMismatchNote(sql, target.schema);
           for (const value of vouchedFrom(result.rows)) vouched.add(value);
           yield emit({
             label: purpose || "Ran query",
@@ -822,7 +865,7 @@ export async function* runAgent(input: AgentRunInput): AsyncGenerator<AgentEvent
             role: "tool",
             toolCallId: call.id,
             toolName: call.name,
-            content: JSON.stringify(summarize(result, sql, unvouched)),
+            content: JSON.stringify(summarize(result, sql, target.schema, unvouched)),
             isError: false,
           });
         } catch (error) {
@@ -916,8 +959,85 @@ function samplingNote(sql: string, result: QueryResult): string | null {
   return null;
 }
 
-function summarize(result: QueryResult, sql: string, unvouched: string[] = []) {
+/**
+ * Column data types the schema declares, keyed by column name in lowercase
+ * for case-insensitive lookup, holding the schema's actual casing alongside
+ * the type so it can be echoed back to the model correctly spelled.
+ */
+function columnTypes(schema: SchemaTable[] | null): Map<string, { name: string; type: string }> {
+  const types = new Map<string, { name: string; type: string }>();
+  for (const table of schema ?? []) {
+    for (const column of table.columns) {
+      types.set(column.name.toLowerCase(), { name: column.name, type: column.data_type });
+    }
+  }
+  return types;
+}
+
+const STRING_TYPE = /^(character varying|character|varchar|char|text|citext)\b/i;
+const DATE_OR_TIME_TYPE = /^(date|timestamp|time)\b/i;
+const DATE_SHAPED_LITERAL = /^\d{4}-\d{2}-\d{2}/;
+
+/** `col >=/<=/>/<'literal'`, column name bare or double-quoted. */
+const RANGE_COMPARISON = /(?:"((?:[^"]|"")+)"|\b([A-Za-z_][A-Za-z0-9_]*)\b)\s*(?:>=|<=|>|<)\s*'([^']*)'/g;
+/** `col BETWEEN 'lit1' AND 'lit2'`, same identifier shapes. */
+const BETWEEN_COMPARISON =
+  /(?:"((?:[^"]|"")+)"|\b([A-Za-z_][A-Za-z0-9_]*)\b)\s+BETWEEN\s+'([^']*)'\s+AND\s+'([^']*)'/gi;
+
+/**
+ * A column the schema says is text, compared to a date-shaped literal with a
+ * range operator or BETWEEN.
+ *
+ * This is what let a bad column choice through silently on a journeys query:
+ * `"Departure Point" >= '2026-09-01' AND < '2026-10-01'` is valid SQL against
+ * a text column — Postgres just compares the strings lexically — so it runs
+ * without error and returns a confident, wrong 0. Nothing about the result
+ * looks broken: no exception, one plausible-looking row of output. The only
+ * place the mistake is visible is the schema the query ran against, so that
+ * is where this checks, in code, rather than trusting the model to have
+ * reasoned it out — which matters especially with `enableThinking` off, where
+ * there is no deliberation step for that self-check to happen in.
+ *
+ * Matching requires the identifier to resolve to an actual schema column, so
+ * a bare word that happens to precede a comparison operator and isn't a real
+ * column (a keyword, a function name) never flags: the lookup into `types`
+ * comes back empty and the candidate is dropped before anything is reported.
+ */
+function dateColumnMismatchNote(sql: string, schema: SchemaTable[] | null): string | null {
+  const types = columnTypes(schema);
+  if (types.size === 0) return null;
+
+  const flagged = new Set<string>();
+  const consider = (quoted: string | undefined, bare: string | undefined, ...literals: string[]) => {
+    const name = quoted?.replace(/""/g, '"') ?? bare;
+    if (!name) return;
+    const column = types.get(name.toLowerCase());
+    if (!column || !STRING_TYPE.test(column.type)) return;
+    if (literals.some((literal) => DATE_SHAPED_LITERAL.test(literal))) flagged.add(column.name);
+  };
+
+  for (const match of sql.matchAll(RANGE_COMPARISON)) consider(match[1], match[2], match[3]);
+  for (const match of sql.matchAll(BETWEEN_COMPARISON)) consider(match[1], match[2], match[3], match[4]);
+  if (flagged.size === 0) return null;
+
+  const columns = [...flagged].map((name) => `"${name}"`).join(", ");
+  const candidates = [...types.values()]
+    .filter((column) => DATE_OR_TIME_TYPE.test(column.type))
+    .map((column) => `"${column.name}"`);
+
+  return (
+    `${columns} ${flagged.size === 1 ? "is a text column" : "are text columns"}, not a date or timestamp, but ` +
+    `this query compared ${flagged.size === 1 ? "it" : "them"} to a date-shaped literal using a range. Text ` +
+    `compares lexically, not calendrically, so this result almost certainly does not mean what a date filter ` +
+    `would have meant. Check the schema for the real date/timestamp column` +
+    (candidates.length ? ` — candidates on this table: ${candidates.join(", ")}` : "") +
+    ` and rerun before answering from this result.`
+  );
+}
+
+function summarize(result: QueryResult, sql: string, schema: SchemaTable[] | null, unvouched: string[] = []) {
   const sampling = samplingNote(sql, result);
+  const typeMismatch = dateColumnMismatchNote(sql, schema);
   return {
     columns: result.columns.map((column) => column.name),
     rows: result.rows.slice(0, ROWS_IN_CONTEXT),
@@ -926,6 +1046,7 @@ function summarize(result: QueryResult, sql: string, unvouched: string[] = []) {
     truncated: result.truncated || result.rows.length > ROWS_IN_CONTEXT,
     duration_ms: result.duration_ms,
     ...(sampling ? { sampling } : {}),
+    ...(typeMismatch ? { column_type_warning: typeMismatch } : {}),
     ...(unvouched.length ? { unverified_filter: unverifiedFilterNote(unvouched) } : {}),
   };
 }
