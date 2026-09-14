@@ -38,7 +38,7 @@ export type ConnectionDoc = {
   /** Points at the secret store. Never leaves this module. */
   credential_handle: string | null;
   /**
-   * Host, port, database name and username are not secrets — only the
+   * Host, port, database name, username and ssl are not secrets — only the
    * password is — so they are kept in plain text here too, duplicated out of
    * the encrypted credentials at write time. This is what lets the UI group
    * connections from different companies that point at the same physical
@@ -49,6 +49,7 @@ export type ConnectionDoc = {
   port: number | null;
   database: string | null;
   username: string | null;
+  ssl: boolean;
   created_at: string;
   updated_at: string;
 };
@@ -70,6 +71,7 @@ export function serializeConnection(doc: ConnectionDoc) {
     port: doc.port,
     database: doc.database,
     username: doc.username,
+    ssl: doc.ssl,
     created_at: doc.created_at,
     updated_at: doc.updated_at,
   };
@@ -154,6 +156,7 @@ export async function createConnection(
     port: input.credentials?.port ?? null,
     database: input.credentials?.database ?? null,
     username: input.credentials?.username ?? null,
+    ssl: input.credentials?.ssl ?? true,
     created_at: now,
     updated_at: now,
   };
@@ -190,6 +193,7 @@ export async function updateConnection(
     changes.port = input.credentials.port ?? null;
     changes.database = input.credentials.database ?? null;
     changes.username = input.credentials.username ?? null;
+    changes.ssl = input.credentials.ssl ?? true;
     // Credentials changed, so the recorded status is about the old ones.
     changes.status = "unknown";
     changes.status_checked_at = null;

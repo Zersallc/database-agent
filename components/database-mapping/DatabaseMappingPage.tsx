@@ -36,6 +36,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import { Switch } from "@/components/ui/switch";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 
 type SchemaColumn = {
@@ -55,6 +56,7 @@ type MappingConnection = {
   port: number | null;
   database: string | null;
   username: string | null;
+  ssl: boolean;
 };
 
 type ApiRow = {
@@ -85,6 +87,7 @@ const ADD_FORM_EMPTY = {
   database: "",
   username: "",
   password: "",
+  ssl: true,
 };
 
 function describeError(error: unknown): string {
@@ -197,7 +200,7 @@ export function DatabaseMappingPage() {
             database: addForm.database || undefined,
             username: addForm.username || undefined,
             password: addForm.password || undefined,
-            ssl: true,
+            ssl: addForm.ssl,
           },
         }),
       });
@@ -226,6 +229,7 @@ export function DatabaseMappingPage() {
       database: row.connection.database ?? "",
       username: row.connection.username ?? "",
       password: "",
+      ssl: row.connection.ssl,
     });
     setEditError(null);
   }
@@ -249,6 +253,7 @@ export function DatabaseMappingPage() {
             database: editForm.database || undefined,
             username: editForm.username || undefined,
             password: editForm.password || undefined,
+            ssl: editForm.ssl,
           }),
         }
       );
@@ -634,6 +639,22 @@ export function DatabaseMappingPage() {
                 />
               </div>
             </div>
+
+            <div className="flex items-center justify-between rounded-lg border border-border px-3 py-2">
+              <div>
+                <Label htmlFor="db-ssl" className="cursor-pointer">
+                  Use SSL
+                </Label>
+                <p className="text-xs text-muted-foreground">
+                  Turn off for a self-hosted database with no TLS configured.
+                </p>
+              </div>
+              <Switch
+                id="db-ssl"
+                checked={addForm.ssl}
+                onCheckedChange={(ssl) => setAddForm({ ...addForm, ssl })}
+              />
+            </div>
           </div>
 
           <DialogFooter>
@@ -697,6 +718,22 @@ export function DatabaseMappingPage() {
                   autoComplete="off"
                 />
               </div>
+            </div>
+
+            <div className="flex items-center justify-between rounded-lg border border-border px-3 py-2">
+              <div>
+                <Label htmlFor="edit-ssl" className="cursor-pointer">
+                  Use SSL
+                </Label>
+                <p className="text-xs text-muted-foreground">
+                  Turn off for a self-hosted database with no TLS configured.
+                </p>
+              </div>
+              <Switch
+                id="edit-ssl"
+                checked={editForm.ssl}
+                onCheckedChange={(ssl) => setEditForm({ ...editForm, ssl })}
+              />
             </div>
           </div>
 

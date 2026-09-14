@@ -40,7 +40,7 @@ export async function PATCH(
     username: typeof body.username === "string" ? body.username : existingCredentials.username,
     password:
       typeof body.password === "string" && body.password ? body.password : existingCredentials.password,
-    ssl: existingCredentials.ssl,
+    ssl: typeof body.ssl === "boolean" ? body.ssl : existingCredentials.ssl,
   };
 
   const updated = await updateConnection(id, connectionId, {
