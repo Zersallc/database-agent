@@ -201,7 +201,10 @@ function renderConnectionIntro(connections: PromptConnection[]): string {
   if (connections.length === 1) {
     const c = connections[0];
     return (
-      `## Connection\n\nYou are querying "${c.name}" (${c.engine}). Write SQL in that engine's dialect.` +
+      `## Connection\n\nYou are querying "${c.name}" (${c.engine}). Write SQL in that engine's dialect. ` +
+      `"${c.name}" is this connection's label for humans — it is not a schema, catalog, or anything else ` +
+      `writable in SQL. Reference tables using exactly the schema-qualified names shown in the Database ` +
+      `schema section below, nothing prepended.` +
       (c.engine === "demo"
         ? "\n\nThis is the built-in sample dataset, not real data. Say so in your answer so nobody acts on these numbers."
         : "")
@@ -211,7 +214,9 @@ function renderConnectionIntro(connections: PromptConnection[]): string {
   return (
     `## Databases\n\nThis workspace has ${connections.length} databases: ${connections.map((c) => c.name).join(", ")}. ` +
     `Identify which one is relevant to the question from the schemas below, and pass its exact name as ` +
-    `"database" when calling run_sql. If more than one could plausibly answer it, ask rather than guessing.`
+    `"database" when calling run_sql — that name only selects the connection for the tool call and is ` +
+    `never part of the SQL text itself. Reference tables in SQL using exactly the schema-qualified names ` +
+    `shown under each database's schema below. If more than one could plausibly answer it, ask rather than guessing.`
   );
 }
 
