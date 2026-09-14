@@ -1653,6 +1653,12 @@ components:
             Markdown. Fenced blocks with the languages `sql`, `table`, `chart`,
             `mermaid`, `flow`, `status`, `diff`, and `file` are rendered by the
             workspace as interactive handlers rather than plain code.
+        thinking:
+          type: [string, "null"]
+          description: >-
+            The model's reasoning behind this reply, when the provider exposed
+            any. Plain text, not markdown — display-only, never replayed back
+            to the model as conversation context.
         attachments:
           type: array
           items: { $ref: "#/components/schemas/Attachment" }
@@ -1693,6 +1699,14 @@ components:
           type: string
           description: Overrides the conversation's connection for this run only.
         response_detail: { $ref: "#/components/schemas/ResponseDetail" }
+        enable_thinking:
+          type: boolean
+          default: false
+          description: >-
+            Let an OpenAI-compatible provider (Qwen, etc.) think before
+            answering. Roughly triples latency and output tokens — off by
+            default. Anthropic ignores this; its adaptive thinking always
+            decides for itself.
         stream:
           type: boolean
           default: false
@@ -1725,6 +1739,9 @@ components:
         content:
           type: [string, "null"]
           description: The agent's reply, in the same markdown dialect as `Message.content`.
+        thinking:
+          type: [string, "null"]
+          description: The agent's reasoning behind the reply, when the provider exposed any. See `Message.thinking`.
         steps:
           type: array
           description: The trace — what the agent did, in order.
@@ -1758,12 +1775,15 @@ components:
               run.created,
               run.step,
               run.content_delta,
+              run.thinking_delta,
               run.completed,
               run.failed,
             ]
         run_id: { type: string }
         step: { $ref: "#/components/schemas/RunStep" }
-        delta: { type: string, description: "Text appended to the reply." }
+        delta:
+          type: string
+          description: Text appended to the reply, or to the model's reasoning for `run.thinking_delta`.
         run: { $ref: "#/components/schemas/Run" }
         error: { $ref: "#/components/schemas/Error" }
 

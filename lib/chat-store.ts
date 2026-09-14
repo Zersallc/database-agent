@@ -30,6 +30,7 @@ export type StoreMessage = {
   id: string;
   role: "user" | "assistant";
   content: string;
+  thinking?: string | null;
   attachments?: Attachment[];
   /** True while a `run.content_delta` stream is still filling this in. */
   streaming?: boolean;
@@ -129,6 +130,7 @@ function fromMessageDoc(doc: {
   id: string;
   role: "user" | "assistant";
   content: string;
+  thinking?: string | null;
   usage?: { input_tokens: number; output_tokens: number } | null;
   duration_ms?: number | null;
   run_id?: string | null;
@@ -137,6 +139,7 @@ function fromMessageDoc(doc: {
     id: doc.id,
     role: doc.role,
     content: doc.content,
+    thinking: doc.thinking ?? null,
     usage: doc.usage ?? null,
     durationMs: doc.duration_ms ?? null,
     runId: doc.run_id ?? null,

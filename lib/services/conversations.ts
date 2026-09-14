@@ -39,6 +39,7 @@ export type MessageDoc = {
   conversation_id: string;
   role: "user" | "assistant";
   content: string;
+  thinking: string | null;
   attachments: Attachment[];
   run_id: string | null;
   /** Set on an assistant message — the run's token usage and wall-clock time, so they survive a reload. */
@@ -67,6 +68,7 @@ export function serializeMessage(doc: MessageDoc) {
     conversation_id: doc.conversation_id,
     role: doc.role,
     content: doc.content,
+    thinking: doc.thinking,
     attachments: doc.attachments,
     run_id: doc.run_id,
     usage: doc.usage,
@@ -192,6 +194,7 @@ export async function appendMessage(
   input: {
     role: "user" | "assistant";
     content: string;
+    thinking?: string | null;
     attachments?: Attachment[];
     runId?: string | null;
     usage?: { input_tokens: number; output_tokens: number } | null;
@@ -205,6 +208,7 @@ export async function appendMessage(
     conversation_id: conversation.id,
     role: input.role,
     content: input.content,
+    thinking: input.thinking ?? null,
     attachments: input.attachments ?? [],
     run_id: input.runId ?? null,
     usage: input.usage ?? null,

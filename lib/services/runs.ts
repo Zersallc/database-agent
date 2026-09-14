@@ -38,6 +38,7 @@ export type RunDoc = {
   request_message_id: string | null;
   response_message_id: string | null;
   content: string | null;
+  thinking: string | null;
   steps: AgentStep[];
   model: string | null;
   usage: { input_tokens: number; output_tokens: number } | null;
@@ -57,6 +58,7 @@ export function serializeRun(doc: RunDoc) {
     request_message_id: doc.request_message_id,
     response_message_id: doc.response_message_id,
     content: doc.content,
+    thinking: doc.thinking,
     steps: doc.steps,
     model: doc.model,
     usage: doc.usage,
@@ -80,6 +82,7 @@ export type CreateRunInput = {
   attachments?: Attachment[];
   connectionId?: string;
   responseDetail: ResponseDetail;
+  enableThinking: boolean;
 };
 
 /** API-level event, mirroring the `RunEvent` schema in the contract. */
@@ -87,6 +90,7 @@ export type RunEvent =
   | { type: "run.created"; run_id: string; run: ReturnType<typeof serializeRun> }
   | { type: "run.step"; run_id: string; step: AgentStep }
   | { type: "run.content_delta"; run_id: string; delta: string }
+  | { type: "run.thinking_delta"; run_id: string; delta: string }
   /**
    * Discard the deltas sent so far. The agent retried the turn, and what was
    * streamed is being replaced rather than continued.
@@ -138,6 +142,7 @@ export async function* executeRun(
     request_message_id: requestMessage.id,
     response_message_id: null,
     content: null,
+    thinking: null,
     steps: [],
     model: null,
     usage: null,
@@ -277,6 +282,7 @@ export async function* executeRun(
       history,
       playbookContext,
       responseDetail: input.responseDetail,
+      enableThinking: input.enableThinking,
       connections: agentConnections,
       client: resolved?.client ?? null,
       reportGenerator,
@@ -286,6 +292,8 @@ export async function* executeRun(
         yield { type: "run.step", run_id: runId, step: event.step };
       } else if (event.type === "delta") {
         yield { type: "run.content_delta", run_id: runId, delta: event.text };
+      } else if (event.type === "thinking_delta") {
+        yield { type: "run.thinking_delta", run_id: runId, delta: event.text };
       } else if (event.type === "reset") {
         yield { type: "run.content_reset", run_id: runId };
       } else if (event.type === "completed") {
@@ -303,6 +311,7 @@ export async function* executeRun(
     const responseMessage = await appendMessage(tenantId, conversation, {
       role: "assistant",
       content: final.content,
+      thinking: final.thinking,
       runId,
       usage: final.usage,
       durationMs: new Date(completedAt).getTime() - new Date(run.created_at).getTime(),
@@ -313,6 +322,7 @@ export async function* executeRun(
       status: "succeeded",
       response_message_id: responseMessage.id,
       content: final.content,
+      thinking: final.thinking,
       steps: final.steps.length ? final.steps : steps,
       model: final.model,
       usage: final.usage,

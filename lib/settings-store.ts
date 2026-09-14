@@ -13,6 +13,14 @@ export type Settings = {
   defaultConnectionId: string;
   responseDetail: ResponseDetail;
   autoRunSql: boolean;
+  /**
+   * Whether an OpenAI-compatible provider (Qwen, etc.) may think before
+   * answering — its `enable_thinking` chat-template flag. Off by default:
+   * thinking roughly triples response time and token cost, and should be an
+   * explicit choice rather than a silent cost on every message. Anthropic
+   * ignores this — its adaptive thinking always decides for itself.
+   */
+  enableThinking: boolean;
 };
 
 const DEFAULTS: Settings = {
@@ -22,6 +30,7 @@ const DEFAULTS: Settings = {
   defaultConnectionId: "",
   responseDetail: "balanced",
   autoRunSql: false,
+  enableThinking: false,
 };
 
 let state: Settings | null = null;
@@ -87,6 +96,7 @@ export function updateSettings(patch: Partial<Settings>) {
       defaultConnectionId: next.defaultConnectionId,
       responseDetail: next.responseDetail,
       autoRunSql: next.autoRunSql,
+      enableThinking: next.enableThinking,
     };
     localStorage.setItem(STORAGE_KEY, JSON.stringify(persisted));
   } catch {

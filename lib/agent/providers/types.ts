@@ -68,6 +68,7 @@ export type ModelTurn = {
 
 export type ModelStreamEvent =
   | { type: "text_delta"; text: string }
+  | { type: "thinking_delta"; text: string }
   | { type: "turn"; turn: ModelTurn };
 
 export type ModelRequest = {
@@ -78,6 +79,13 @@ export type ModelRequest = {
   maxTokens: number;
   /** Anthropic-only reasoning depth. Adapters without an equivalent ignore it. */
   effort: string;
+  /**
+   * Whether an OpenAI-compatible provider may think before answering — Qwen's
+   * `enable_thinking` chat-template flag. Providers without an equivalent
+   * ignore it. Anthropic ignores it too, deliberately: its adaptive thinking
+   * decides for itself per-question, so there is no "off" worth exposing.
+   */
+  enableThinking: boolean;
   /**
    * Whether the model may choose not to call a tool.
    *

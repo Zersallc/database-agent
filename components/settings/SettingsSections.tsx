@@ -152,6 +152,18 @@ export function ChatSection({ settings }: { settings: Settings }) {
             onCheckedChange={(autoRunSql) => updateSettings({ autoRunSql })}
           />
         </Row>
+
+        <Row
+          label="Model thinking"
+          description="Let the model reason before answering, shown via Show thinking on a reply. Roughly triples response time and token cost — off by default. Anthropic decides this for itself regardless of this setting."
+          htmlFor="enable-thinking"
+        >
+          <Switch
+            id="enable-thinking"
+            checked={settings.enableThinking}
+            onCheckedChange={(enableThinking) => updateSettings({ enableThinking })}
+          />
+        </Row>
       </CardContent>
     </Card>
   );

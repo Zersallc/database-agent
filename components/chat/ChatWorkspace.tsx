@@ -102,6 +102,7 @@ export function ChatWorkspace() {
           content: trimmed,
           connection_id: activeConnection.id || undefined,
           response_detail: settings.responseDetail,
+          enable_thinking: settings.enableThinking,
           stream: true,
         }),
       });
@@ -111,21 +112,31 @@ export function ChatWorkspace() {
       }
 
       let finalContent = "";
+      let finalThinking = "";
       for await (const { event, data } of parseSse(res.body)) {
         const payload = JSON.parse(data);
         if (event === "run.step") {
           setLiveSteps((prev) => [...prev, payload.step]);
         } else if (event === "run.content_reset") {
           // The agent is retrying this turn; what arrived so far is being
-          // replaced, not continued.
+          // replaced, not continued — the discarded turn's reasoning goes too.
           finalContent = "";
-          updateLocalMessage(conversationId, assistantMessageId, { content: "", streaming: true });
+          finalThinking = "";
+          updateLocalMessage(conversationId, assistantMessageId, {
+            content: "",
+            thinking: "",
+            streaming: true,
+          });
         } else if (event === "run.content_delta") {
           finalContent += payload.delta;
           updateLocalMessage(conversationId, assistantMessageId, { content: finalContent, streaming: true });
+        } else if (event === "run.thinking_delta") {
+          finalThinking += payload.delta;
+          updateLocalMessage(conversationId, assistantMessageId, { thinking: finalThinking, streaming: true });
         } else if (event === "run.completed") {
           updateLocalMessage(conversationId, assistantMessageId, {
             content: payload.run.content ?? finalContent,
+            thinking: payload.run.thinking ?? finalThinking,
             streaming: false,
             usage: payload.run.usage,
             durationMs: payload.run.duration_ms,

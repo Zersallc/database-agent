@@ -6,6 +6,7 @@ import { SparklesIcon } from "lucide-react";
 import { Dialog, DialogContent, DialogTitle } from "@/components/ui/dialog";
 import { Markdown } from "./Markdown";
 import { ExecutedQueryBlock } from "./blocks/ExecutedQueryBlock";
+import { ThinkingBlock } from "./blocks/ThinkingBlock";
 import { queriesForRun, resultSignature, type ExecutedQuery } from "./blocks/sql/executed";
 import type { StoreMessage } from "@/lib/chat-store";
 import type { Attachment } from "@/lib/workspace";
@@ -120,6 +121,7 @@ export function MessageBubble({
           {queries.map((query) => (
             <ExecutedQueryBlock key={query.id} query={query} defaultOpen={isLatest} />
           ))}
+          {message.thinking && <ThinkingBlock thinking={message.thinking} />}
           <Markdown
             content={message.content}
             autoRun={isLatest}

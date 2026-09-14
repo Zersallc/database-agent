@@ -169,6 +169,11 @@ export class OpenAiCompatibleModelClient implements ModelClient {
               tool_choice: request.toolChoice ?? "auto",
             }
           : {}),
+        // Non-standard vLLM/SGLang field — only sent when thinking is
+        // actually wanted, so providers that don't recognize it (OpenAI,
+        // DeepSeek, Groq, ...) never see it and today's behavior is
+        // unchanged unless someone opts in.
+        ...(request.enableThinking ? { chat_template_kwargs: { enable_thinking: true } } : {}),
       }),
     });
 

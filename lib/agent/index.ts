@@ -45,6 +45,7 @@ export type AgentStep = {
 export type AgentEvent =
   | { type: "step"; step: AgentStep }
   | { type: "delta"; text: string }
+  | { type: "thinking_delta"; text: string }
   /**
    * Discard everything streamed so far: the turn is being retried and the text
    * already sent was the answer being replaced. Without this the reader would
@@ -55,6 +56,7 @@ export type AgentEvent =
   | {
       type: "completed";
       content: string;
+      thinking: string | null;
       steps: AgentStep[];
       model: string | null;
       usage: { input_tokens: number; output_tokens: number } | null;
@@ -76,25 +78,28 @@ function withoutFencedBlocks(text: string): string {
     .replace(/```[\s\S]*?(?:```|$)/g, " ");
 }
 
+/** What a chunk of stream resolved to, split by whether it was inside `<think>`. */
+type ThinkSplit = { visible: string; thinking: string };
+
 /**
- * Strips `<think>...</think>` reasoning out of a token stream as it arrives.
+ * Splits `<think>...</think>` reasoning out of a token stream as it arrives.
  *
  * A provider without a reasoning parser configured (vLLM with no
  * `--reasoning-parser`, notably) inlines a thinking model's reasoning
  * straight into `content` — there is no separate field to just not read, so
- * the tags have to be filtered out of the text itself. A closing tag can
- * land in a different chunk than its opener, so this holds back whatever
- * might be the start of a tag until the next chunk resolves it, rather than
- * ever emitting a torn `<thi` as visible text.
+ * the tags have to be split out of the text itself. A closing tag can land
+ * in a different chunk than its opener, so this holds back whatever might be
+ * the start of a tag until the next chunk resolves it, rather than ever
+ * emitting a torn `<thi` as visible text.
  */
 class ThinkFilter {
   private buffer = "";
   private insideThink = false;
 
-  /** The visible (non-reasoning) text resolved from this chunk, if any. */
-  feed(chunk: string): string {
+  /** The visible and reasoning text resolved from this chunk, if any. */
+  feed(chunk: string): ThinkSplit {
     this.buffer += chunk;
-    let out = "";
+    const out: ThinkSplit = { visible: "", thinking: "" };
 
     for (;;) {
       const tag = this.insideThink ? "</think>" : "<think>";
@@ -102,22 +107,26 @@ class ThinkFilter {
 
       if (index === -1) {
         const holdback = longestTagPrefixAtEnd(this.buffer, tag);
-        if (!this.insideThink) out += this.buffer.slice(0, this.buffer.length - holdback);
+        const resolved = this.buffer.slice(0, this.buffer.length - holdback);
+        if (this.insideThink) out.thinking += resolved;
+        else out.visible += resolved;
         this.buffer = this.buffer.slice(this.buffer.length - holdback);
         return out;
       }
 
-      if (!this.insideThink) out += this.buffer.slice(0, index);
+      const resolved = this.buffer.slice(0, index);
+      if (this.insideThink) out.thinking += resolved;
+      else out.visible += resolved;
       this.buffer = this.buffer.slice(index + tag.length);
       this.insideThink = !this.insideThink;
     }
   }
 
   /** Whatever is left once the stream ends — never a full tag, or `feed` would have resolved it. */
-  finish(): string {
-    const leftover = this.insideThink ? "" : this.buffer;
+  finish(): ThinkSplit {
+    const leftover = this.buffer;
     this.buffer = "";
-    return leftover;
+    return this.insideThink ? { visible: "", thinking: leftover } : { visible: leftover, thinking: "" };
   }
 }
 
@@ -277,6 +286,8 @@ export type AgentRunInput = {
   client: ModelClient | null;
   /** Reasoning depth. Only the Anthropic adapter acts on it. */
   effort?: string;
+  /** Whether the model may think before answering. Off costs nothing extra; on roughly triples latency and output tokens. Defaults to off. */
+  enableThinking?: boolean;
   /** Null when report generation isn't wired for this run (no hospital data connected). */
   reportGenerator: ReportGenerator | null;
 };
@@ -377,7 +388,7 @@ export async function* runAgent(input: AgentRunInput): AsyncGenerator<AgentEvent
       detail: "Add one under Settings → Model provider.",
       query_id: null,
     });
-    yield { type: "completed", content: DEMO_REPLY, steps, model: null, usage: null };
+    yield { type: "completed", content: DEMO_REPLY, thinking: null, steps, model: null, usage: null };
     return;
   }
 
@@ -404,6 +415,7 @@ export async function* runAgent(input: AgentRunInput): AsyncGenerator<AgentEvent
     ...(input.reportGenerator ? [GENERATE_ESG_REPORT_TOOL] : []),
   ];
   let answer = "";
+  let reasoning = "";
   let model: string | null = null;
   // How many tools this run has actually called, and whether the forced retry
   // has already been spent. Both are per-run, not per-iteration: a turn that
@@ -469,23 +481,35 @@ export async function* runAgent(input: AgentRunInput): AsyncGenerator<AgentEvent
         tools,
         maxTokens: MAX_TOKENS,
         effort: input.effort ?? "high",
+        enableThinking: input.enableThinking ?? false,
         toolChoice,
       })) {
         if (event.type === "text_delta") {
-          const visible = think.feed(event.text);
+          const { visible, thinking } = think.feed(event.text);
+          if (thinking) {
+            reasoning += thinking;
+            yield { type: "thinking_delta", text: thinking };
+          }
           if (visible) {
             answer += visible;
             yield { type: "delta", text: visible };
           }
+        } else if (event.type === "thinking_delta") {
+          reasoning += event.text;
+          yield { type: "thinking_delta", text: event.text };
         } else {
           turn = event.turn;
         }
       }
 
       const trailing = think.finish();
-      if (trailing) {
-        answer += trailing;
-        yield { type: "delta", text: trailing };
+      if (trailing.thinking) {
+        reasoning += trailing.thinking;
+        yield { type: "thinking_delta", text: trailing.thinking };
+      }
+      if (trailing.visible) {
+        answer += trailing.visible;
+        yield { type: "delta", text: trailing.visible };
       }
 
       if (!turn) {
@@ -550,6 +574,7 @@ export async function* runAgent(input: AgentRunInput): AsyncGenerator<AgentEvent
           // answer — which it would otherwise imitate, the same self-imitation
           // that caused this.
           answer = "";
+          reasoning = "";
           yield { type: "reset" };
           continue;
         }
@@ -585,6 +610,7 @@ export async function* runAgent(input: AgentRunInput): AsyncGenerator<AgentEvent
               `Answer from those rows and quote what they say. Do not report that nothing was found.`,
           });
           answer = "";
+          reasoning = "";
           yield { type: "reset" };
           continue;
         }
@@ -626,6 +652,7 @@ export async function* runAgent(input: AgentRunInput): AsyncGenerator<AgentEvent
               `that and say what it does hold.`,
           });
           answer = "";
+          reasoning = "";
           yield { type: "reset" };
           continue;
         }
@@ -633,6 +660,7 @@ export async function* runAgent(input: AgentRunInput): AsyncGenerator<AgentEvent
         yield {
           type: "completed",
           content: answer.trim(),
+          thinking: reasoning.trim() || null,
           steps,
           model,
           usage: { input_tokens: inputTokens, output_tokens: outputTokens },
@@ -818,6 +846,7 @@ export async function* runAgent(input: AgentRunInput): AsyncGenerator<AgentEvent
       content:
         answer.trim() ||
         "I could not finish this within the step limit. Narrowing the question usually helps.",
+      thinking: reasoning.trim() || null,
       steps,
       model,
       usage: { input_tokens: inputTokens, output_tokens: outputTokens },

@@ -27,6 +27,7 @@ const CREATE = v.object({
     v.oneOf(["concise", "balanced", "detailed"] as const),
     "balanced"
   ),
+  enable_thinking: v.withDefault(v.boolean(), false),
   stream: v.withDefault(v.boolean(), false),
 });
 
@@ -64,6 +65,7 @@ export const POST = defineRoute<Params>({
       })),
       connectionId: input.connection_id,
       responseDetail: input.response_detail,
+      enableThinking: input.enable_thinking,
     };
 
     if (input.stream) {

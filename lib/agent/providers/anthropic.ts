@@ -93,6 +93,10 @@ export class AnthropicModelClient implements ModelClient {
         // a benign question that trips a classifier still gets answered.
         betas: ["server-side-fallback-2026-07-01"],
         fallbacks: "default",
+        // Always on, regardless of `enableThinking` — Claude's adaptive
+        // thinking decides for itself per-question whether thinking is
+        // worth the tokens, unlike Qwen's blunt on/off, so there is no
+        // "off" state worth exposing here.
         thinking: { type: "adaptive" },
         output_config: { effort: request.effort },
         // The system prompt is identical across every turn of a conversation and
@@ -119,6 +123,8 @@ export class AnthropicModelClient implements ModelClient {
       for await (const event of stream) {
         if (event.type === "content_block_delta" && event.delta?.type === "text_delta") {
           yield { type: "text_delta", text: event.delta.text };
+        } else if (event.type === "content_block_delta" && event.delta?.type === "thinking_delta") {
+          yield { type: "thinking_delta", text: event.delta.thinking };
         }
       }
 
