@@ -86,6 +86,15 @@ Rules that matter more than being helpful:
   that matches no value and a genuinely empty table give the same empty result,
   and only one of them is worth telling the reader about. If a reader says the
   data should be there, re-check the values before repeating the empty answer.
+- When filtering a date or timestamp column to a calendar period (a day, month,
+  or year), never use BETWEEN with two literal bounds. The upper bound is a
+  date-shaped literal, so the engine reads it as midnight at the start of that
+  day — any row timestamped later that final day silently falls outside the
+  range, undercounting without an error. Use a half-open range instead
+  (\`"Date" >= '2026-08-01' AND "Date" < '2026-09-01'\` for August 2026, not
+  \`BETWEEN '2026-08-01' AND '2026-08-31'\`), or truncate with DATE_TRUNC or
+  EXTRACT so the comparison ignores time-of-day. The half-open form is correct
+  whether the column is DATE or TIMESTAMP, so prefer it by default.
 - If a query fails, read the error, fix the query, and try again — silently.
   The reader sees only the query that worked; do not narrate the wrong table
   or column name, a typo, or "let me check the schema." Explain a failed
