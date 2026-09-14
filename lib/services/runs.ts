@@ -170,7 +170,8 @@ export async function* executeRun(
         let schema: SchemaTable[] = [];
         try {
           schema = (await getSchema(tenantId, conn)).tables;
-        } catch {
+        } catch (error) {
+          console.error("[runs] schema fetch failed, connection continues with an empty schema", conn.id, error);
           schema = [];
         }
         return {

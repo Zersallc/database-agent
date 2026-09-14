@@ -102,7 +102,8 @@ export async function POST(request: Request): Promise<Response> {
         let schema: SchemaTable[] = [];
         try {
           schema = (await getSchema(principal.tenantId, connection)).tables;
-        } catch {
+        } catch (error) {
+          console.error("[chat] schema fetch failed, connection continues with an empty schema", connection.id, error);
           schema = [];
         }
         return {
