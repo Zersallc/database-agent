@@ -136,7 +136,8 @@ describe("rendering the values a column holds", () => {
             complete: true,
           },
         }),
-      ])
+      ]),
+      "postgres"
     );
     assert.match(rendered, /one of: 'Health or Hygiene or Ergonomic Hazards', 'Electrical Hazards'/);
   });
@@ -145,7 +146,8 @@ describe("rendering the values a column holds", () => {
     // Claiming completeness on a sample is worse than saying nothing: the model
     // rules out the value it should have gone looking for.
     const rendered = renderSchema(
-      table([column({ distinct_values: { list: ["Electrical Hazards"], complete: false } })])
+      table([column({ distinct_values: { list: ["Electrical Hazards"], complete: false } })]),
+      "postgres"
     );
     assert.match(rendered, /values include: 'Electrical Hazards'/);
     assert.doesNotMatch(rendered, /one of/);
@@ -162,28 +164,70 @@ describe("rendering the values a column holds", () => {
             complete: true,
           },
         }),
-      ])
+      ]),
+      "postgres"
     );
     assert.ok(rendered.includes("Environmental (Spills, Waste, Emission etc.)"));
   });
 
   test("an apostrophe is escaped for the SQL the model will write", () => {
     const rendered = renderSchema(
-      table([column({ distinct_values: { list: ["Driver's Hazards"], complete: true } })])
+      table([column({ distinct_values: { list: ["Driver's Hazards"], complete: true } })]),
+      "postgres"
     );
     assert.ok(rendered.includes("'Driver''s Hazards'"));
   });
 
-  test("a column without values renders exactly as it did before", () => {
-    const rendered = renderSchema(table([column()]));
-    assert.match(rendered, /- HSE Observation SubClassification: text$/m);
+  test("a column without values renders with the same shape as before", () => {
+    const rendered = renderSchema(table([column()]), "postgres");
+    assert.match(rendered, /- "HSE Observation SubClassification": text$/m);
     assert.doesNotMatch(rendered, /one of|values include/);
   });
 
   test("an empty list is not rendered as an empty set", () => {
     const rendered = renderSchema(
-      table([column({ distinct_values: { list: [], complete: true } })])
+      table([column({ distinct_values: { list: [], complete: true } })]),
+      "postgres"
     );
     assert.doesNotMatch(rendered, /one of|values include/);
+  });
+});
+
+/**
+ * The bug this was written against: a name shown bare left the model
+ * re-guessing how to write it every turn — see `formatIdentifier` in prompt.ts.
+ */
+describe("quoting identifiers that need it", () => {
+  test("a table name with a space is quoted in the header", () => {
+    const rendered = renderSchema(table([column()]), "postgres");
+    assert.match(rendered, /^### public\."Observations DB"$/m);
+  });
+
+  test("a column name with a space is quoted", () => {
+    const rendered = renderSchema(table([column()]), "postgres");
+    assert.match(rendered, /^- "HSE Observation SubClassification": text$/m);
+  });
+
+  test("a plain snake_case table and column stay bare", () => {
+    const rendered = renderSchema(
+      [
+        {
+          schema: "public",
+          name: "observations",
+          description: null,
+          row_estimate: null,
+          columns: [column({ name: "status" })],
+        },
+      ],
+      "postgres"
+    );
+    assert.match(rendered, /^### public\.observations$/m);
+    assert.match(rendered, /^- status: text$/m);
+  });
+
+  test("mysql quotes with backticks instead of double quotes", () => {
+    const rendered = renderSchema(table([column()]), "mysql");
+    assert.match(rendered, /^### public\.`Observations DB`$/m);
+    assert.match(rendered, /^- `HSE Observation SubClassification`: text$/m);
   });
 });

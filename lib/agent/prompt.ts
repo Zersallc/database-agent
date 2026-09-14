@@ -124,14 +124,44 @@ function renderValues(column: SchemaColumn): string {
   return values.complete ? `\n    one of: ${quoted}` : `\n    values include: ${quoted}`;
 }
 
-export function renderSchema(tables: SchemaTable[]): string {
+/**
+ * Whether writing this identifier bare in SQL means something other than what
+ * it names — a space, a capital letter, or a leading digit all do, because an
+ * unquoted identifier is folded or rejected by the engine.
+ */
+function needsQuoting(identifier: string): boolean {
+  return !/^[a-z_][a-z0-9_]*$/.test(identifier);
+}
+
+/**
+ * How this identifier has to be written for the engine to read it as the
+ * literal name rather than fold or reject it.
+ *
+ * This is what "Observations DB" cost a whole run to before it existed: shown
+ * bare in the schema, the model had no way to tell that the space was part of
+ * the name rather than a rendering artifact, so every turn re-guessed a quoting
+ * scheme from scratch — `observations`, `Observations`, never landing on
+ * `"Observations DB"` — until the step budget ran out. Quoting it here, once,
+ * removes the guess instead of asking the model to make it correctly every time.
+ */
+function formatIdentifier(identifier: string, engine: string): string {
+  if (!needsQuoting(identifier)) return identifier;
+  return engine === "mysql"
+    ? `\`${identifier.replace(/`/g, "``")}\``
+    : `"${identifier.replace(/"/g, '""')}"`;
+}
+
+export function renderSchema(tables: SchemaTable[], engine: string): string {
   if (tables.length === 0) {
     return "## Database schema\n\nThe schema could not be read. Say so rather than guessing at table names.";
   }
 
   const rendered = tables
     .map((table) => {
-      const qualified = table.schema ? `${table.schema}.${table.name}` : table.name;
+      const qualified = [table.schema, table.name]
+        .filter((part): part is string => Boolean(part))
+        .map((part) => formatIdentifier(part, engine))
+        .join(".");
       const header = table.description ? `### ${qualified} — ${table.description}` : `### ${qualified}`;
       const rows = table.row_estimate ? ` (~${table.row_estimate.toLocaleString()} rows)` : "";
       const columns = table.columns
@@ -142,7 +172,8 @@ export function renderSchema(tables: SchemaTable[]): string {
           ].filter(Boolean);
           const suffix = flags.length ? ` [${flags.join(", ")}]` : "";
           const note = column.description ? ` — ${column.description}` : "";
-          return `- ${column.name}: ${column.data_type}${suffix}${note}${renderValues(column)}`;
+          const name = formatIdentifier(column.name, engine);
+          return `- ${name}: ${column.data_type}${suffix}${note}${renderValues(column)}`;
         })
         .join("\n");
       return `${header}${rows}\n${columns}`;
@@ -190,13 +221,13 @@ function renderSchemas(connections: PromptConnection[]): string | null {
 
   if (connections.length === 1) {
     const c = connections[0];
-    return c.schema ? renderSchema(c.schema) : null;
+    return c.schema ? renderSchema(c.schema, c.engine) : null;
   }
 
   return connections
     .map((c) =>
       c.schema
-        ? `### ${c.name}\n\n${renderSchema(c.schema)}`
+        ? `### ${c.name}\n\n${renderSchema(c.schema, c.engine)}`
         : `### ${c.name}\n\nThe schema could not be read for this database. Say so rather than guessing at table names.`
     )
     .join("\n\n");
