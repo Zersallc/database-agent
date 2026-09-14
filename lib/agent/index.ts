@@ -77,6 +77,60 @@ function withoutFencedBlocks(text: string): string {
 }
 
 /**
+ * Strips `<think>...</think>` reasoning out of a token stream as it arrives.
+ *
+ * A provider without a reasoning parser configured (vLLM with no
+ * `--reasoning-parser`, notably) inlines a thinking model's reasoning
+ * straight into `content` — there is no separate field to just not read, so
+ * the tags have to be filtered out of the text itself. A closing tag can
+ * land in a different chunk than its opener, so this holds back whatever
+ * might be the start of a tag until the next chunk resolves it, rather than
+ * ever emitting a torn `<thi` as visible text.
+ */
+class ThinkFilter {
+  private buffer = "";
+  private insideThink = false;
+
+  /** The visible (non-reasoning) text resolved from this chunk, if any. */
+  feed(chunk: string): string {
+    this.buffer += chunk;
+    let out = "";
+
+    for (;;) {
+      const tag = this.insideThink ? "</think>" : "<think>";
+      const index = this.buffer.toLowerCase().indexOf(tag);
+
+      if (index === -1) {
+        const holdback = longestTagPrefixAtEnd(this.buffer, tag);
+        if (!this.insideThink) out += this.buffer.slice(0, this.buffer.length - holdback);
+        this.buffer = this.buffer.slice(this.buffer.length - holdback);
+        return out;
+      }
+
+      if (!this.insideThink) out += this.buffer.slice(0, index);
+      this.buffer = this.buffer.slice(index + tag.length);
+      this.insideThink = !this.insideThink;
+    }
+  }
+
+  /** Whatever is left once the stream ends — never a full tag, or `feed` would have resolved it. */
+  finish(): string {
+    const leftover = this.insideThink ? "" : this.buffer;
+    this.buffer = "";
+    return leftover;
+  }
+}
+
+/** The length of the longest suffix of `text` that is also a prefix of `tag`. */
+function longestTagPrefixAtEnd(text: string, tag: string): number {
+  const max = Math.min(text.length, tag.length - 1);
+  for (let length = max; length > 0; length--) {
+    if (text.slice(-length).toLowerCase() === tag.slice(0, length)) return length;
+  }
+  return 0;
+}
+
+/**
  * Every number a reader would take as a figure, normalized for comparison.
  *
  * Ordered-list markers are stripped first: "1. Health hazards" is numbering, not
@@ -407,6 +461,7 @@ export async function* runAgent(input: AgentRunInput): AsyncGenerator<AgentEvent
   try {
     for (let iteration = 0; iteration < MAX_ITERATIONS; iteration++) {
       let turn: ModelTurn | null = null;
+      const think = new ThinkFilter();
 
       for await (const event of input.client.stream({
         system,
@@ -417,11 +472,20 @@ export async function* runAgent(input: AgentRunInput): AsyncGenerator<AgentEvent
         toolChoice,
       })) {
         if (event.type === "text_delta") {
-          answer += event.text;
-          yield { type: "delta", text: event.text };
+          const visible = think.feed(event.text);
+          if (visible) {
+            answer += visible;
+            yield { type: "delta", text: visible };
+          }
         } else {
           turn = event.turn;
         }
+      }
+
+      const trailing = think.finish();
+      if (trailing) {
+        answer += trailing;
+        yield { type: "delta", text: trailing };
       }
 
       if (!turn) {
