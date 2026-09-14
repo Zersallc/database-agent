@@ -290,6 +290,12 @@ export type AgentRunInput = {
   enableThinking?: boolean;
   /** Null when report generation isn't wired for this run (no hospital data connected). */
   reportGenerator: ReportGenerator | null;
+  /**
+   * Wall-clock date the model should ground relative and year-omitted dates
+   * in. Defaults to the real clock; overridable so a test can pin "today"
+   * instead of the run's outcome depending on when it happens to execute.
+   */
+  now?: Date;
 };
 
 const RUN_SQL_TOOL_NAME = "run_sql";
@@ -396,6 +402,7 @@ export async function* runAgent(input: AgentRunInput): AsyncGenerator<AgentEvent
     playbookContext: input.playbookContext,
     responseDetail: input.responseDetail,
     connections: input.connections.map((c) => ({ name: c.name, engine: c.engine, schema: c.schema })),
+    now: input.now ?? new Date(),
   });
 
   const messages: ModelMessage[] = [

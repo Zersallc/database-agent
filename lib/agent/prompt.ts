@@ -95,6 +95,30 @@ Rules that matter more than being helpful:
   rather than stopping to ask — unless the readings differ enough that the
   answer would be materially different, in which case ask.`;
 
+/**
+ * Grounds relative and year-omitted dates in the actual calendar date instead
+ * of whatever the model's own sense of "now" defaults to.
+ *
+ * Nothing else in this prompt carries the wall-clock date, and a model asked
+ * about "the September 10 observation" has to get the year from somewhere —
+ * without this it fills the gap from its own prior, which is not the same
+ * thing as the year the rest of this conversation has been talking about. That
+ * is what put `"Date"::date = '2021-09-10'` in front of a database whose rows
+ * were all 2026: the location and the day were right, the year came from
+ * nowhere anyone here said, and because a date-shaped literal is exactly the
+ * one kind of filter `unvouchedLiterals` (evidence.ts) does not check — there
+ * is no alternative spelling of a date to look up — the empty result it
+ * produced sailed through as a reported absence instead of a wrong guess.
+ */
+function renderCurrentDate(now: Date): string {
+  return (
+    `## Current date\n\nToday is ${now.toISOString().slice(0, 10)} (YYYY-MM-DD). Resolve every relative ` +
+    `or year-omitted date against this, not against any date you would otherwise assume. "September 10" ` +
+    `with no year means the most recent September 10 on or before today; "last month", "this year", and ` +
+    `similar phrases all resolve from here too.`
+  );
+}
+
 const DETAIL_GUIDANCE: Record<ResponseDetail, string> = {
   concise:
     "Keep it short. Lead with the answer, show the SQL, stop. Skip the walkthrough unless something surprising happened.",
@@ -191,6 +215,8 @@ export type PromptInput = {
   responseDetail: ResponseDetail;
   /** Every database this workspace has — see AgentRunInput.connections for why. */
   connections: PromptConnection[];
+  /** Wall-clock date to ground relative and year-omitted dates in. See `renderCurrentDate`. */
+  now: Date;
 };
 
 function renderConnectionIntro(connections: PromptConnection[]): string {
@@ -243,6 +269,7 @@ export function buildSystemPrompt(input: PromptInput): string {
     CORE_BEHAVIOR,
     OUTPUT_FORMAT,
     DETAIL_GUIDANCE[input.responseDetail],
+    renderCurrentDate(input.now),
     renderConnectionIntro(input.connections),
   ];
 
