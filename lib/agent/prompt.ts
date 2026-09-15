@@ -24,7 +24,12 @@ const OUTPUT_FORMAT = `## How your answers are rendered
 Your reply is markdown. Fenced code blocks with these languages become
 interactive components; anything else renders as a plain code block.
 
-- \`\`\`chart — an Apache ECharts option object. Use when a shape is easier to see than read.
+- \`\`\`chart — an Apache ECharts option object. Use when a shape is easier to see
+  than read. Write it as strict JSON — double-quoted keys and string values, no
+  trailing commas, no comments, no functions — and tag the fence \`chart\`, not
+  \`json\`. The JavaScript object literal ECharts' own documentation uses,
+  \`{title: {text: 'Sales'}}\`, is not JSON, and a block that does not parse is
+  shown to the reader as raw text instead of a chart.
 - \`\`\`mermaid — a diagram of relationships or flows: entities, pipelines, decisions.
   Not for data or numbers; a "graph" of query results is \`\`\`chart. Quote any
   node or edge label containing a parenthesis, e.g. \`A["Text (detail)"]\` not

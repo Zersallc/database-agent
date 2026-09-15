@@ -8,6 +8,7 @@ import type { AgentStep } from "./blocks/AgentStatusBlock";
 import type { DiffPayload } from "./blocks/DiffBlock";
 import type { FilePayload } from "./blocks/FileBlock";
 import { resultSignature } from "./blocks/sql/executed";
+import { asChartOption, parseRelaxedJson } from "./relaxed-json";
 
 const ChartBlock = dynamic(
   () => import("./blocks/ChartBlock").then((m) => m.ChartBlock),
@@ -41,14 +42,6 @@ const FileBlock = dynamic(
   () => import("./blocks/FileBlock").then((m) => m.FileBlock),
   { ssr: false }
 );
-
-function safeParseJSON<T>(text: string): T | null {
-  try {
-    return JSON.parse(text) as T;
-  } catch {
-    return null;
-  }
-}
 
 export function Markdown({
   content,
@@ -111,7 +104,7 @@ export function Markdown({
             }
 
             if (lang === "chart") {
-              const spec = safeParseJSON<Record<string, unknown>>(raw);
+              const spec = parseRelaxedJson<Record<string, unknown>>(raw);
               return spec ? (
                 <ChartBlock option={spec} />
               ) : (
@@ -120,13 +113,16 @@ export function Markdown({
             }
 
             if (lang === "table" || lang === "json") {
-              const data = safeParseJSON<{
+              const data = parseRelaxedJson<{
                 columns: string[];
                 rows: never[][];
               }>(raw);
               if (!Array.isArray(data?.columns) || !Array.isArray(data?.rows)) {
-                // `json` is not a table block; anything else tagged that way
+                // A chart the model tagged `json` rather than `chart` is still
+                // a chart — see `asChartOption`. Anything else tagged that way
                 // renders as plain code, exactly as it did before.
+                const option = asChartOption(data);
+                if (option) return <ChartBlock option={option} />;
                 return <CodeBlock code={raw} language="json" />;
               }
               if (renderedResults?.has(resultSignature(data.columns, data.rows))) {
@@ -136,7 +132,7 @@ export function Markdown({
             }
 
             if (lang === "flow") {
-              const data = safeParseJSON<{ nodes: never[]; edges: never[] }>(raw);
+              const data = parseRelaxedJson<{ nodes: never[]; edges: never[] }>(raw);
               return data ? (
                 <FlowBlock nodes={data.nodes} edges={data.edges} />
               ) : (
@@ -145,7 +141,7 @@ export function Markdown({
             }
 
             if (lang === "status") {
-              const data = safeParseJSON<{ title?: string; steps: AgentStep[] }>(
+              const data = parseRelaxedJson<{ title?: string; steps: AgentStep[] }>(
                 raw
               );
               return data ? (
@@ -156,7 +152,7 @@ export function Markdown({
             }
 
             if (lang === "diff") {
-              const data = safeParseJSON<DiffPayload>(raw);
+              const data = parseRelaxedJson<DiffPayload>(raw);
               return data ? (
                 <DiffBlock diff={data} />
               ) : (
@@ -165,7 +161,7 @@ export function Markdown({
             }
 
             if (lang === "file") {
-              const data = safeParseJSON<FilePayload>(raw);
+              const data = parseRelaxedJson<FilePayload>(raw);
               return data ? (
                 <FileBlock file={data} />
               ) : (
