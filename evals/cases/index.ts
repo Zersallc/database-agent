@@ -7,6 +7,7 @@ import { namingMultiConnectionAmbiguous } from "./naming-multi-connection-ambigu
 import { namingDecoyTable } from "./naming-decoy-table.eval";
 import { answerShape } from "./answer-shape.eval";
 import { noInventedAttribution } from "./no-invented-attribution.eval";
+import { followUpRowOnScreen } from "./follow-up-row-on-screen.eval";
 import type { EvalCase } from "../types";
 
 export const ALL_CASES: EvalCase[] = [
@@ -19,4 +20,5 @@ export const ALL_CASES: EvalCase[] = [
   namingDecoyTable,
   answerShape,
   noInventedAttribution,
+  followUpRowOnScreen,
 ];

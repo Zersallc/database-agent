@@ -50,6 +50,11 @@ const MAX_VOUCHING_LENGTH = 120;
  * nudging the model to go verify it would be noise. A pattern is judged on its
  * longest fixed run, so `'%health%'` is looked up as "health" and `'%a%b%'` —
  * which has nothing long enough to identify anything — is left alone.
+ *
+ * The date case is right about spelling and wrong about absence, which is why
+ * `unqueriedDateColumns` below exists. A date has no alternative spelling, but
+ * it does have an alternative *column*, and that is the same failure wearing
+ * different clothes.
  */
 function comparable(raw: string): string | null {
   const value = raw.replace(/''/g, "'").trim();
@@ -123,6 +128,81 @@ export function foundNothing(rows: unknown[][], rowCount: number): boolean {
   if (rowCount === 0) return true;
   if (rows.length !== 1) return false;
   return rows[0].every((cell) => cell === null || cell === undefined || cell === 0 || cell === "0" || cell === "");
+}
+
+/** A date-shaped literal on the right of a comparison — `>= '2026-09-11'`, `BETWEEN '2026-08-01' AND …`. */
+const COMPARED_DATE = /(?:>=|<=|<>|!=|=|>|<|\bBETWEEN\b|\bAND\b)\s*'(\d{4}-\d{2}[^']*)'/i;
+
+/** Does this query pin anything to a calendar date at all? */
+export function comparesADate(sql: string): boolean {
+  return COMPARED_DATE.test(sql);
+}
+
+/**
+ * A query that dated its rows by one column while the table dates them several
+ * ways, and found nothing.
+ *
+ * The bug this exists for: asked to open "the September 11 one" — a row the
+ * previous turn had listed under that date — the model filtered `"Date"` to
+ * September 11 and got nothing back, because the row's `"Date"` is the 10th and
+ * only its `"Timestamp"` is the 11th. One table, one row, four date columns
+ * (`"Timestamp"`, `"Date"`, `"Last Edited DateTime"`, `"Closer DateTime"`), and
+ * the day the reader said belonged to a different one than the day the query
+ * asked about.
+ *
+ * Every other check here was structurally blind to it. `unvouchedLiterals`
+ * drops date literals by design; `dateColumnMismatchNote` looks for a text
+ * column and `"Date"` really is a timestamp; the contradiction check compares
+ * the claim against the row count and the row count really was zero. Nothing
+ * was misspelled, mistyped, or misread. The query was well-formed and asked the
+ * wrong column, which is visible only in the schema — so, like the type
+ * mismatch, it is checked here in code rather than left to a reasoning pass the
+ * model may not be running.
+ *
+ * Membership is by name appearing anywhere in the statement rather than by
+ * parsing the WHERE clause, which costs nothing and survives every spelling of
+ * the comparison — `DATE_TRUNC('day', "Date") = …`, `"Date"::date`, `BETWEEN`,
+ * `EXTRACT`. A date column named in the SELECT list but not filtered is read as
+ * filtered; that only makes this quieter, never wrong.
+ */
+export function unqueriedDateColumns(
+  sql: string,
+  dateColumns: string[]
+): { filtered: string[]; others: string[] } | null {
+  if (dateColumns.length < 2 || !comparesADate(sql)) return null;
+
+  const haystack = sql.toLowerCase();
+  const filtered: string[] = [];
+  const others: string[] = [];
+  for (const column of dateColumns) {
+    (haystack.includes(column.toLowerCase()) ? filtered : others).push(column);
+  }
+
+  return filtered.length > 0 && others.length > 0 ? { filtered, others } : null;
+}
+
+/**
+ * What an empty date filter does not establish, said next to the empty result.
+ *
+ * The same move as `unverifiedFilterNote` and for the same reason: by the time
+ * the prose says "no observations were found for September 11", the reasoning
+ * that produced it has already happened, and a sentence in the system prompt
+ * competing with everything else there is not what stops it.
+ */
+export function otherDateColumnsNote(filtered: string[], others: string[]): string {
+  const list = (names: string[]) => names.map((name) => `"${name}"`).join(", ");
+  const one = filtered.length === 1;
+  return (
+    `Nothing matched, and this query dated the rows by ${list(filtered)} alone. This table also dates ` +
+    `them by ${list(others)}. Those are different events on the same row — when it was recorded, when ` +
+    `it happened, when it was last touched — and they routinely fall on different days, so a row can sit ` +
+    `inside your window on one of them and outside it on ${one ? "the one you filtered" : "the ones you filtered"}. ` +
+    `An empty result here is that column's answer, not the table's. Before telling the reader there is no ` +
+    `such row: if the date came from rows already shown in this conversation, go back and find that row by ` +
+    `the identifier it came with rather than by its date — the row is already in front of you and its key ` +
+    `cannot miss. If the date came from the reader, try the other date columns before concluding nothing ` +
+    `is there, and say which column you dated the answer by.`
+  );
 }
 
 /** Values from a result, in the form the vouching set holds them. */

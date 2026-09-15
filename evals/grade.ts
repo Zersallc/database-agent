@@ -68,6 +68,15 @@ export function answerMentions(outcome: EvalOutcome, value: string, why: string)
   };
 }
 
+/** The final answer matches nothing like `pattern` — for a claim it must not make. */
+export function answerNeverMatches(outcome: EvalOutcome, pattern: RegExp, why: string): GradeResult {
+  const pass = !pattern.test(outcome.finalText);
+  return {
+    pass,
+    reason: pass ? `the answer avoided ${pattern} (${why})` : `the answer matched ${pattern} — ${why}`,
+  };
+}
+
 /**
  * The answer does not retype the result set at it.
  *

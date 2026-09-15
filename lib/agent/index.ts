@@ -22,7 +22,14 @@ import { ApiError } from "@/lib/api/errors";
 import type { QueryResult, SchemaTable } from "@/lib/connectors";
 import { MissingModuleError } from "@/lib/providers/optional-module";
 import { DEMO_REPLY } from "./demo-reply";
-import { foundNothing, unverifiedFilterNote, unvouchedLiterals, vouchedFrom } from "./evidence";
+import {
+  foundNothing,
+  otherDateColumnsNote,
+  unqueriedDateColumns,
+  unverifiedFilterNote,
+  unvouchedLiterals,
+  vouchedFrom,
+} from "./evidence";
 import { buildSystemPrompt, type ResponseDetail } from "./prompt";
 import { ModelProviderError } from "./providers";
 import type { ModelClient, ModelMessage, ModelTurn, ToolDefinition } from "./providers";
@@ -567,6 +574,14 @@ export async function* runAgent(input: AgentRunInput): AsyncGenerator<AgentEvent
   let lastQueryTypeMismatch: string | null = null;
   let typeMismatchCorrected = false;
   /**
+   * Set when the most recent query found nothing after dating its rows by one
+   * of the table's several date columns — see `unqueriedDateColumns`. Empty
+   * results only, so a query that found what it was looking for is never
+   * second-guessed about which column it looked in.
+   */
+  let lastQueryOtherDateColumns: string | null = null;
+  let dateColumnCorrected = false;
+  /**
    * Every value this database has shown the model: the schema's value lists,
    * plus the cells of every result read so far. This is what a filter literal
    * has to be backed by before an empty result may be called an absence.
@@ -824,6 +839,41 @@ export async function* runAgent(input: AgentRunInput): AsyncGenerator<AgentEvent
         }
 
         /**
+         * The answer reports an absence, and the empty result behind it came
+         * from one of several date columns on the table. Neither branch above
+         * can see this one: there is no contradiction, because the query really
+         * did return nothing, and no unvouched literal, because a date is
+         * exactly the kind of value `comparable` drops. The query was
+         * well-formed and asked the wrong column.
+         *
+         * Forced, for the same reason as the unvouched absence: the lookup that
+         * would settle it has not happened yet. Once — if the model checks the
+         * other columns, or goes back to the row by its key, and the row still
+         * is not there, that second answer is a verified absence and is exactly
+         * what this is trying to produce.
+         */
+        if (!dateColumnCorrected && lastQueryOtherDateColumns && claimsNothingWasFound(answer)) {
+          dateColumnCorrected = true;
+          toolChoice = "required";
+          yield emit({
+            label: "Reported an absence from one date column of several — retrying",
+            status: "done",
+            detail: lastQueryOtherDateColumns,
+            query_id: null,
+          });
+          messages.push({
+            role: "user",
+            content:
+              `${lastQueryOtherDateColumns} Run that check now, then answer from what it returns. If the ` +
+              `row genuinely is not there under any of these columns, say so and say which ones you tried.`,
+          });
+          answer = "";
+          reasoning = "";
+          yield { type: "reset" };
+          continue;
+        }
+
+        /**
          * The answer rests on a query that filtered a text column with a
          * date-shaped range — see `dateColumnMismatchNote`. Unlike the
          * absence case above, this does not wait for the answer to claim
@@ -1005,6 +1055,14 @@ export async function* runAgent(input: AgentRunInput): AsyncGenerator<AgentEvent
           const unvouched = lastQueryFoundNothing ? unvouchedLiterals(sql, vouched) : [];
           unverifiedAbsence = unvouched.length > 0 ? unvouched : null;
           lastQueryTypeMismatch = dateColumnMismatchNote(sql, target.schema);
+          // Only an empty result raises the question of whether the right date
+          // column was asked: rows that came back answered it.
+          const otherDates = lastQueryFoundNothing
+            ? unqueriedDateColumns(sql, dateColumnsFor(sql, target.schema))
+            : null;
+          lastQueryOtherDateColumns = otherDates
+            ? otherDateColumnsNote(otherDates.filtered, otherDates.others)
+            : null;
           for (const value of vouchedFrom(result.rows)) vouched.add(value);
           yield emit({
             label: purpose || "Ran query",
@@ -1016,7 +1074,9 @@ export async function* runAgent(input: AgentRunInput): AsyncGenerator<AgentEvent
             role: "tool",
             toolCallId: call.id,
             toolName: call.name,
-            content: JSON.stringify(summarize(result, sql, target.schema, unvouched)),
+            content: JSON.stringify(
+              summarize(result, sql, target.schema, unvouched, lastQueryOtherDateColumns)
+            ),
             isError: false,
           });
         } catch (error) {
@@ -1187,6 +1247,31 @@ function dateColumnMismatchNote(sql: string, schema: SchemaTable[] | null): stri
 }
 
 /**
+ * The date and timestamp columns of the tables this query reads.
+ *
+ * Scoped by which table names appear in the statement, unlike `columnTypes`
+ * above, because this one names its findings out loud: telling a model querying
+ * `Observations DB` that it forgot `Report."Reporting Period"` would be an
+ * invitation to go and join two unrelated tables. When no table name matches —
+ * an alias, a CTE, a spelling this does not recognise — the whole schema is the
+ * fallback, since a slightly wide list is still better than silence.
+ */
+function dateColumnsFor(sql: string, schema: SchemaTable[] | null): string[] {
+  const haystack = sql.toLowerCase();
+  const all = schema ?? [];
+  const named = all.filter((table) => haystack.includes(table.name.toLowerCase()));
+  const scoped = named.length > 0 ? named : all;
+
+  const columns = new Set<string>();
+  for (const table of scoped) {
+    for (const column of table.columns) {
+      if (DATE_OR_TIME_TYPE.test(column.data_type)) columns.add(column.name);
+    }
+  }
+  return [...columns];
+}
+
+/**
  * One cell, shortened to what identifies it — with the shortening stated in
  * the value rather than done quietly, so the model never reads a cut-off
  * incident report as the whole of one and quotes it back as complete.
@@ -1217,7 +1302,13 @@ function rowsInContext(rows: unknown[][]): { rows: unknown[][]; heldForSize: boo
   return { rows: kept, heldForSize: kept.length < capped.length };
 }
 
-function summarize(result: QueryResult, sql: string, schema: SchemaTable[] | null, unvouched: string[] = []) {
+function summarize(
+  result: QueryResult,
+  sql: string,
+  schema: SchemaTable[] | null,
+  unvouched: string[] = [],
+  otherDateColumns: string | null = null
+) {
   const { rows, heldForSize } = rowsInContext(result.rows);
   const sampling = samplingNote(sql, result, heldForSize);
   const typeMismatch = dateColumnMismatchNote(sql, schema);
@@ -1231,6 +1322,7 @@ function summarize(result: QueryResult, sql: string, schema: SchemaTable[] | nul
     ...(sampling ? { sampling } : {}),
     ...(typeMismatch ? { column_type_warning: typeMismatch } : {}),
     ...(unvouched.length ? { unverified_filter: unverifiedFilterNote(unvouched) } : {}),
+    ...(otherDateColumns ? { other_date_columns: otherDateColumns } : {}),
   };
 }
 
