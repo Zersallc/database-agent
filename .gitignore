@@ -13,6 +13,9 @@
 # testing
 /coverage
 
+# eval reports (ad hoc runs; a deliberately-named baseline can be force-added)
+/evals/results/*.json
+
 # next.js
 /.next/
 /out/

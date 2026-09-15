@@ -8,6 +8,7 @@
     "start": "next start",
     "lint": "eslint",
     "test": "node scripts/run-tests.mjs",
+    "eval": "node scripts/run-evals.mjs",
     "api:check": "node scripts/check-api-compat.mjs",
     "api:release": "node scripts/check-api-compat.mjs --release"
   },
