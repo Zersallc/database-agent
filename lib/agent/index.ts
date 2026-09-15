@@ -552,6 +552,31 @@ export async function* runAgent(input: AgentRunInput): AsyncGenerator<AgentEvent
         );
       }
 
+      if (turn.stopReason === "max_tokens") {
+        /**
+         * The model was cut off before it finished, not because it chose to
+         * stop. Falling through to the normal completion path here would
+         * present a truncated answer as if it were whole — worse if the cut
+         * happened mid tool call, where `turn.toolCalls` holds an incomplete,
+         * unsafe-to-execute SQL request. Fail loudly instead of guessing at
+         * how much of either was usable.
+         */
+        yield emit({
+          label: "Cut off by the output token limit",
+          status: "failed",
+          detail:
+            turn.toolCalls.length > 0
+              ? "The model was cut off mid tool call before it could finish."
+              : "The model's reply was cut off before it finished.",
+          query_id: null,
+        });
+        throw new ApiError(
+          "upstream_model_error",
+          "The model's reply was cut off before it could finish (it hit its output token limit for this conversation). Try a shorter question, ask for less detail, or start a new conversation.",
+          { details: { toolCallsInProgress: turn.toolCalls.length } }
+        );
+      }
+
       if (turn.stopReason !== "tool_use" || turn.toolCalls.length === 0) {
         /**
          * The retry. A turn that ran no query and yet presented data is
