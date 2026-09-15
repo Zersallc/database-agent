@@ -130,19 +130,42 @@ const MAX_VALUE_LENGTH = 80;
  * complete only when it demonstrably covers every distinct value. A table that
  * has never been analysed simply yields nothing, which is the right failure:
  * silence rather than a confident half-list.
+ *
+ * Two kinds of column come back, from the same `n_distinct` the planner
+ * already has. A small positive count with common values is a category, and
+ * its spellings are worth naming. A ratio at or past `MOSTLY_UNIQUE` is the
+ * opposite — a column with one distinct value per row, which has no category
+ * to name and no most-common value either. The second costs nothing extra:
+ * these rows carry no `most_common_vals`, which is exactly why the old
+ * `IS NOT NULL` filter excluded the free-text columns entirely.
  */
 const COLUMN_VALUES_SQL = `
   SELECT schemaname,
          tablename,
          attname,
          n_distinct,
-         most_common_vals::text::text[] AS common_values
+         CASE WHEN n_distinct > 0 AND n_distinct <= $1
+              THEN most_common_vals::text::text[]
+         END AS common_values
     FROM pg_stats
    WHERE schemaname NOT IN ('pg_catalog', 'information_schema')
-     AND most_common_vals IS NOT NULL
-     AND n_distinct > 0
-     AND n_distinct <= $1
+     AND (
+           (most_common_vals IS NOT NULL AND n_distinct > 0 AND n_distinct <= $1)
+           OR n_distinct <= $2
+         )
 `;
+
+/**
+ * How unique a column has to be before it is called free text rather than a
+ * category.
+ *
+ * `pg_stats.n_distinct` is negative when it is a ratio of distinct values to
+ * rows, so -1 is "every row different" and this is "nine rows in ten". Short
+ * of 1.0 on purpose: a narrative column repeats the occasional "N/A" or
+ * duplicate paste without becoming a category, and it would still be wrong to
+ * report the winner of a count over it.
+ */
+const MOSTLY_UNIQUE = -0.9;
 
 /** Only text-ish columns: a category is spelled, and a number or a date is not. */
 function holdsText(dataType: string): boolean {
@@ -312,7 +335,7 @@ export class PostgresConnector implements DataSourceConnector {
 
     let rows: any[];
     try {
-      const result = await client.query(COLUMN_VALUES_SQL, [MAX_DISTINCT_VALUES]);
+      const result = await client.query(COLUMN_VALUES_SQL, [MAX_DISTINCT_VALUES, MOSTLY_UNIQUE]);
       rows = result.rows;
     } catch {
       return;
@@ -321,7 +344,17 @@ export class PostgresConnector implements DataSourceConnector {
     for (const row of rows) {
       const table = tables.get(`${row.schemaname}.${row.tablename}`);
       const column = table?.columns.find((c) => c.name === row.attname);
-      if (!column || !holdsText(column.data_type) || namesPeople(column.name)) continue;
+      if (!column || !holdsText(column.data_type)) continue;
+
+      // Before the people check, not after: this flag names no values, so
+      // there is nothing in it to withhold, and "who reported the most" is a
+      // question that needs the same answer about whether the column repeats.
+      if (Number(row.n_distinct) <= MOSTLY_UNIQUE) {
+        column.mostly_unique = true;
+        continue;
+      }
+
+      if (namesPeople(column.name)) continue;
 
       const values: string[] = (row.common_values ?? [])
         .filter((value: unknown): value is string => typeof value === "string" && value.length > 0)

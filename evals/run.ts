@@ -60,15 +60,39 @@ async function main() {
   let anyFailed = false;
   for (const kase of cases) {
     process.stdout.write(`${kase.id} ... `);
-    const { passRate, results } = await runCaseNTimes(kase, client, repeat);
+    const { passRate, results, failure } = await runCaseNTimes(kase, client, repeat);
     report.cases.push({ id: kase.id, description: kase.description, passRate, results });
     const pct = `${Math.round(passRate * 100)}%`;
-    console.log(passRate === 1 ? `PASS (${pct})` : `FAIL (${pct})`);
+    console.log(failure ? "ERROR" : passRate === 1 ? `PASS (${pct})` : `FAIL (${pct})`);
     if (passRate < 1) {
       anyFailed = true;
       for (const [i, r] of results.entries()) {
         if (!r.pass) console.log(`  run ${i + 1}: ${r.reason}`);
       }
+    }
+
+    /**
+     * A run that never reached the model is a setup mistake, not a finding —
+     * the same call `buildRealClient` makes about missing credentials, one
+     * layer further in, where the wrong model name or an unreachable server
+     * shows up. Stopping here costs one run to diagnose instead of the whole
+     * suite reporting 0% for a reason that has nothing to do with any case.
+     *
+     * A rate limit reaches this only after the harness has already waited it
+     * out and been pushed back again, so it is worth stopping on too — but it
+     * says nothing about the configuration, and pointing at the model name
+     * would send the reader after the wrong thing.
+     */
+    if (failure) {
+      console.error(
+        `\nStopped: the agent failed before answering, so nothing here measures model behavior.\n` +
+          `  ${failure.code}: ${failure.message}\n` +
+          (failure.retryAfter
+            ? `The provider was still rate limiting after ${failure.retryAfter}s of backoff. ` +
+              `Rerun the remaining cases when the server is quieter, or with a lower --repeat.`
+            : `Check MODEL_PROVIDER, AGENT_MODEL and MODEL_BASE_URL against the models the server lists.`)
+      );
+      break;
     }
   }
 

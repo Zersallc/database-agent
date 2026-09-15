@@ -90,6 +90,21 @@ export type SchemaColumn = {
    * connector that cannot is silent rather than asserting an absence.
    */
   distinct_values?: ColumnValues;
+  /**
+   * The other end of the same scale: near enough one distinct value per row.
+   *
+   * `distinct_values` says which categories a column holds. This says the
+   * column holds no categories at all — it is a narrative, a title, an id, one
+   * value per record — which is the fact that decides whether "the most common
+   * one" is a question with an answer over it. Grouping such a column by count
+   * returns every row with a count of 1 and a winner picked by the engine, and
+   * a model that cannot see the difference between this column and the
+   * classification next to it has to guess which one the reader meant.
+   *
+   * Discloses no values, so unlike `distinct_values` it is not withheld for a
+   * column of people.
+   */
+  mostly_unique?: boolean;
 };
 
 export type SchemaTable = {

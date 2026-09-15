@@ -111,6 +111,32 @@ Rules that matter more than being helpful:
   that matches no value and a genuinely empty table give the same empty result,
   and only one of them is worth telling the reader about. If a reader says the
   data should be there, re-check the values before repeating the empty answer.
+- "Most common", "most used", "most reported", "typical" all ask which value
+  occurs most often, and that question only has an answer over a column whose
+  values repeat. A category, type, status, location or person repeats. A
+  free-text description, finding, comment, title or id does not — it holds one
+  distinct value per record, so grouping it by count returns every row with a
+  count of 1 and no winner. Look at the counts before writing the answer: if the
+  top count in a ranking ordered by count is 1, then 1 is the maximum, nothing
+  repeated, and the row that sorted first is whichever of the ties the engine
+  reached first. "The most used X is Y" is then false however it is phrased, and
+  stating its count of 1 alongside does not rescue it. Say there is no most
+  common value, and where a column on the same table does repeat, group by that
+  instead and say which one you used.
+- A ranking reported without a denominator says less than it looks like. "44
+  observations" is a figure the table already shows; "44 of 189, about a
+  quarter, with the next two categories taking another quarter between them" is
+  the shape the reader cannot get by looking at it. So when you rank, get the
+  total as well — \`COUNT(*) OVER ()\` alongside the counts, or one more
+  aggregate after them — and say which it is: a distribution dominated by the
+  top one, or a long tail where the leader is barely ahead. Name the column you
+  grouped by whenever another column could have been meant.
+- A GROUP BY key of NULL is not a value. It is the rows where that column is
+  empty, so report it as missing data or exclude it, rather than letting it stand
+  in as the answer to which value is most common. What fraction of a column is
+  unpopulated is a count over the whole table and nothing a single group
+  establishes: one NULL group is not evidence that a field is unfilled or that
+  the data is incomplete.
 - When filtering a date or timestamp column to a calendar period (a day, month,
   or year), never use BETWEEN with two literal bounds. The upper bound is a
   date-shaped literal, so the engine reads it as midnight at the start of that
@@ -164,7 +190,11 @@ function renderCurrentDate(now: Date): string {
     `## Current date\n\nToday is ${now.toISOString().slice(0, 10)} (YYYY-MM-DD). Resolve every relative ` +
     `or year-omitted date against this, not against any date you would otherwise assume. "September 10" ` +
     `with no year means the most recent September 10 on or before today; "last month", "this year", and ` +
-    `similar phrases all resolve from here too.`
+    `similar phrases all resolve from here too.\n\nA named calendar period keeps its own bounds once it ` +
+    `is resolved: "this year" runs from January 1 of this year up to January 1 of next year, and "this ` +
+    `month" from the 1st up to the 1st of the next — the whole period, not the part of it that has ` +
+    `already happened, and not the year cut off at the end of the current month. Stop the range at today ` +
+    `only when the reader asked for year- or month-to-date, and say so when you do.`
   );
 }
 
@@ -178,7 +208,7 @@ const DETAIL_GUIDANCE: Record<ResponseDetail, string> = {
 };
 
 /**
- * The values a column holds, written where the model reads the column.
+ * What kind of values a column holds, written where the model reads the column.
  *
  * This is here to remove a guess rather than to add information. Asked about
  * "health or hygiene hazards", a model that cannot see the values writes the
@@ -191,6 +221,20 @@ const DETAIL_GUIDANCE: Record<ResponseDetail, string> = {
  * out the value it should have searched for.
  */
 function renderValues(column: SchemaColumn): string {
+  /**
+   * The other half of the same guess, and the one the incident turned on:
+   * asked for "the most used observation", a model that cannot tell this
+   * column from the classification beside it groups the narrative, gets one
+   * row per record with a count of 1, and reports the first as the winner.
+   * Both columns are `text` in every other respect.
+   */
+  if (column.mostly_unique) {
+    return (
+      `\n    free text: about one distinct value per row, so grouping it by count gives every row a ` +
+      `count of 1 and no most-common value — count a category column instead`
+    );
+  }
+
   const values = column.distinct_values;
   if (!values?.list.length) return "";
   const quoted = values.list.map((value) => `'${value.replace(/'/g, "''")}'`).join(", ");

@@ -1,5 +1,12 @@
 /**
- * Evidence for an absence.
+ * Evidence for a claim the rows cannot carry.
+ *
+ * Mostly an absence — the claim this codebase cannot check by reading the
+ * answer — and, at the bottom of the file, its mirror image: a ranking whose
+ * top row is not the winner it looks like. Both are cases where the SQL ran
+ * cleanly, the rows came back, the model read them correctly, and the sentence
+ * it wrote about them is still false. Nothing in the prose gives that away, so
+ * the check has to happen against the query and the result instead.
  *
  * "No observations match that" is the one claim this codebase cannot check by
  * reading the answer. It carries no figure to trace and promises no action, so
@@ -238,4 +245,206 @@ export function unverifiedFilterNote(values: string[]): string {
     `what the column actually holds — SELECT DISTINCT on it, or a case-insensitive LIKE — and filter on ` +
     `a value from that list before telling the reader there is none.`
   );
+}
+
+/**
+ * Keywords inside quoted text are not keywords. Blank the literals first.
+ *
+ * Both kinds: a column genuinely named `"Group By Area"` would otherwise make
+ * every query that selects it look like an aggregate.
+ */
+export function withoutLiterals(sql: string): string {
+  return sql.replace(/'(?:[^']|'')*'/g, "''").replace(/"(?:[^"]|"")*"/g, '""');
+}
+
+/**
+ * A ranking query: it groups the rows, counts each group, and puts the biggest
+ * first. The shape of every "which is the most common" question there is.
+ */
+export function ranksByCount(sql: string): boolean {
+  const bare = withoutLiterals(sql).toLowerCase();
+  return (
+    /\bgroup\s+by\b/.test(bare) &&
+    /\border\s+by\b/.test(bare) &&
+    /\bdesc\b/.test(bare) &&
+    /\bcount\s*\(/.test(bare)
+  );
+}
+
+/** A count from a result cell, however the driver typed it — a bigint arrives as a string. */
+function asCount(value: unknown): number | null {
+  if (typeof value === "bigint") return Number(value);
+  if (typeof value === "number") return Number.isInteger(value) && value >= 0 ? value : null;
+  if (typeof value === "string" && /^\d+$/.test(value.trim())) return Number(value.trim());
+  return null;
+}
+
+/** Result columns that could be the tally: a non-negative integer in every row. */
+function countCandidates(columns: string[], rows: unknown[][]): number[] {
+  const candidates: number[] = [];
+  for (let index = 0; index < columns.length; index++) {
+    if (rows.every((row) => asCount(row[index]) !== null)) candidates.push(index);
+  }
+  return candidates;
+}
+
+/** The leading `ORDER BY <target> DESC`, read off the statement. */
+const ORDER_BY_DESC = /\border\s+by\s+([\s\S]+?)\s+desc\b/i;
+
+/**
+ * Which result column this ranking is actually ordered by, or null if that is
+ * not a tally at all.
+ *
+ * The ORDER BY is read from the raw statement rather than the blanked one
+ * because the target is frequently a quoted identifier — `ORDER BY "count"
+ * DESC` — and blanking the quotes would erase the very thing being looked up.
+ *
+ * Returning null when the sort resolves to a column that is not a tally is the
+ * point of reading it at all: a result ordered by date that happens to carry a
+ * `count(*)` alongside is not a frequency ranking, and a 1 in that column means
+ * nothing about which value is commonest.
+ */
+function rankedColumn(sql: string, columns: string[], rows: unknown[][]): number | null {
+  const candidates = countCandidates(columns, rows);
+  if (candidates.length === 0) return null;
+
+  const target = ORDER_BY_DESC.exec(sql)?.[1]?.trim() ?? "";
+
+  if (/^\d+$/.test(target)) {
+    const ordinal = Number(target) - 1;
+    return candidates.includes(ordinal) ? ordinal : null;
+  }
+
+  const named = target.replace(/^"([\s\S]*)"$/, "$1").replace(/""/g, '"').toLowerCase();
+  const byName = columns.findIndex((column) => column.toLowerCase() === named);
+  if (byName !== -1) return candidates.includes(byName) ? byName : null;
+
+  // An expression rather than a name — `ORDER BY COUNT(*) DESC`. Take the
+  // column that says it is a count, else the last tally, which is where an
+  // aggregate conventionally sits.
+  const byLabel = candidates.find((index) => /count|freq|tally|total|occurrence|times/i.test(columns[index]));
+  return byLabel ?? candidates[candidates.length - 1];
+}
+
+export type RankingWithoutAWinner = {
+  /** The tally the top group came back with. */
+  count: number;
+  /** How many of the returned groups share it. */
+  tied: number;
+  /** The column the rows were grouped by, as the result labelled it. */
+  groupedBy: string | null;
+  /** The top group's key is NULL: the rows where that column is empty, not a value. */
+  topKeyIsNull: boolean;
+  /** The top tally is 1, so nothing repeats and there is no most-common value at all. */
+  nothingRepeats: boolean;
+};
+
+/**
+ * A ranking whose top row is not the winner it looks like.
+ *
+ * The incident: asked for "the most used observation", the model grouped
+ * `"Observation or Finding"` — a free-text column holding one narrative
+ * sentence per record — counted each group, ordered by the count descending,
+ * took the first, and reported "the most used observation is 'Acid plant motor
+ * complete rusted…', which was recorded once." The count was 1. With the rows
+ * ordered by count descending, a top count of 1 means 1 is the maximum: every
+ * value occurs exactly once, there is no most-used anything, and the row that
+ * came back is whichever of the hundreds of ties the engine reached first. The
+ * same question a month wider returned a NULL key with a count of 1, and that
+ * answer generalised from the single group to "the data is incomplete".
+ *
+ * Every existing check was structurally blind to it, and not by oversight. The
+ * query was well-formed and ran. It returned a row, so `foundNothing` is false
+ * and the contradiction branch would have insisted the data was there. The
+ * filter was a date, which `comparable` drops. `samplingNote` wants a LIMIT
+ * with no ORDER BY, and this query has both — an ORDER BY that sorts nothing,
+ * because every key it compares is equal. The value quoted in the answer came
+ * out of a real result, so `quotesUngroundedValue` passes it, and the figure
+ * was a real 1. Read correctly, every one of them; the error is entirely in
+ * what the sentence claims of a tie.
+ *
+ * So it is checked here, against the result, rather than left to a reasoning
+ * pass — which with `enableThinking` off does not happen at all.
+ */
+export function rankingWithoutAWinner(
+  sql: string,
+  columns: string[],
+  rows: unknown[][]
+): RankingWithoutAWinner | null {
+  if (rows.length === 0 || !ranksByCount(sql)) return null;
+
+  const index = rankedColumn(sql, columns, rows);
+  if (index === null) return null;
+
+  const counts = rows.map((row) => asCount(row[index]));
+  const top = counts[0];
+  if (top === null) return null;
+
+  // Ordered descending, so the ties are the run at the front.
+  let tied = 0;
+  while (tied < counts.length && counts[tied] === top) tied++;
+
+  const keyIndex = columns.findIndex((_, position) => position !== index);
+  const topKey = keyIndex === -1 ? undefined : rows[0][keyIndex];
+  const topKeyIsNull = keyIndex !== -1 && (topKey === null || topKey === undefined);
+  const nothingRepeats = top === 1;
+
+  if (!nothingRepeats && tied < 2 && !topKeyIsNull) return null;
+
+  return {
+    count: top,
+    tied,
+    groupedBy: keyIndex === -1 ? null : columns[keyIndex],
+    topKeyIsNull,
+    nothingRepeats,
+  };
+}
+
+/**
+ * What the top row of that ranking does not establish, said next to the row.
+ *
+ * The same move as `samplingNote` and `unverifiedFilterNote`, for the same
+ * reason: by the time the prose says "the most used observation is X", the
+ * reasoning that produced it has already happened, and a sentence in the
+ * system prompt competing with everything else there is not what stops it.
+ */
+export function noWinnerNote(finding: RankingWithoutAWinner): string {
+  const column = finding.groupedBy ? `"${finding.groupedBy}"` : "the grouped column";
+  const parts: string[] = [];
+
+  if (finding.nothingRepeats) {
+    parts.push(
+      `This ranking has no winner in it. The rows are ordered by their tally descending and the top one ` +
+        `holds 1 row, which makes 1 the maximum: no value of ${column} occurs twice anywhere this query ` +
+        `looked, so there is no most common, most frequent, most used or most reported one. The row that ` +
+        `sorted first is whichever of the ties the engine reached first — any other row would have been ` +
+        `equally true — so presenting it as the most used, the top, or the leading anything is a claim ` +
+        `this result does not support, even with its count of 1 stated alongside. Free text has no mode: ` +
+        `a description, finding, comment, title or id holds a distinct value per record, while a ` +
+        `category, type, status, location or person repeats and can be counted. If the reader asked ` +
+        `which was most common, group by a column whose values actually repeat and say which one you ` +
+        `used, or tell them this column holds one distinct value per record so the question has no ` +
+        `answer over it — and say which, rather than naming a tie as the answer.`
+    );
+  } else if (finding.tied > 1) {
+    parts.push(
+      `The top ${finding.tied} groups all hold ${finding.count} rows, so the one that sorted first is an ` +
+        `arbitrary pick among equals rather than the single most common — which of them leads was decided ` +
+        `by the engine, not by the data. Report it as a ${finding.tied}-way tie, or rank by something that ` +
+        `distinguishes them, rather than calling the first one the most common.`
+    );
+  }
+
+  if (finding.topKeyIsNull) {
+    parts.push(
+      `The top group's key is NULL, which is not a value: it is the rows where ${column} is empty. Those ` +
+        `belong in an answer about missing data, said as missing, rather than standing in as the most ` +
+        `common value — exclude them (${column} IS NOT NULL) or report them explicitly as rows with none. ` +
+        `How much of the column is unpopulated is a count over the whole table and nothing this one group ` +
+        `establishes: a NULL at the top of a ranking is not evidence that the field is unpopulated, or ` +
+        `that the data is incomplete.`
+    );
+  }
+
+  return parts.join(" ");
 }
