@@ -194,6 +194,54 @@ describe("rendering the values a column holds", () => {
 });
 
 /**
+ * The same guess at the other end of the scale.
+ *
+ * Asked for "the most used observation", the agent grouped `"Observation or
+ * Finding"` — a narrative sentence per record — counted the groups, and
+ * reported the first as the most used, with its count of 1 alongside. Both
+ * that column and the classification next to it are `text`, hold no listable
+ * values, and rendered identically; which of them a frequency question is
+ * about was left to the model to infer from the name.
+ */
+describe("saying which columns hold no categories at all", () => {
+  test("a free-text column says a count over it has no winner", () => {
+    const rendered = renderSchema(
+      table([column({ name: "Observation or Finding", mostly_unique: true })]),
+      "postgres"
+    );
+    assert.match(rendered, /free text: about one distinct value per row/);
+    assert.match(rendered, /no most-common value/);
+  });
+
+  test("it points at the column that would answer the question instead", () => {
+    const rendered = renderSchema(
+      table([column({ name: "Observation or Finding", mostly_unique: true })]),
+      "postgres"
+    );
+    assert.match(rendered, /count a category column instead/);
+  });
+
+  test("a category column is not labelled free text", () => {
+    const rendered = renderSchema(
+      table([column({ distinct_values: { list: ["Electrical Hazards"], complete: true } })]),
+      "postgres"
+    );
+    assert.doesNotMatch(rendered, /free text/);
+  });
+
+  test("the flag discloses no values of its own", () => {
+    // Which is why it is kept for columns of people, where the value list is
+    // deliberately withheld — see `attachColumnValues`.
+    const rendered = renderSchema(
+      table([column({ name: "Reported By", mostly_unique: true })]),
+      "postgres"
+    );
+    assert.match(rendered, /free text/);
+    assert.doesNotMatch(rendered, /one of|values include/);
+  });
+});
+
+/**
  * The bug this was written against: a name shown bare left the model
  * re-guessing how to write it every turn — see `formatIdentifier` in prompt.ts.
  */

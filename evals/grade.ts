@@ -113,6 +113,22 @@ export function allOf(...grades: GradeResult[]): GradeResult {
   };
 }
 
+/**
+ * ORs several grades together, for a case with more than one right answer.
+ *
+ * Not a weaker `allOf`. Some questions genuinely have two correct moves —
+ * group by the column that repeats, or tell the reader the one they named does
+ * not — and grading only the move we happened to think of first would fail the
+ * other for being different rather than wrong.
+ */
+export function anyOf(...grades: GradeResult[]): GradeResult {
+  const passed = grades.find((g) => g.pass);
+  return {
+    pass: Boolean(passed),
+    reason: passed ? passed.reason : `none of the accepted answers: ${grades.map((g) => g.reason).join("; ")}`,
+  };
+}
+
 function connectionsIn(outcome: EvalOutcome): string {
   return outcome.executedSql.length ? [...new Set(outcome.executedSql.map((q) => q.connection))].join(", ") : "(none)";
 }

@@ -24,11 +24,14 @@ import { MissingModuleError } from "@/lib/providers/optional-module";
 import { DEMO_REPLY } from "./demo-reply";
 import {
   foundNothing,
+  noWinnerNote,
   otherDateColumnsNote,
+  rankingWithoutAWinner,
   unqueriedDateColumns,
   unverifiedFilterNote,
   unvouchedLiterals,
   vouchedFrom,
+  withoutLiterals,
 } from "./evidence";
 import { buildSystemPrompt, type ResponseDetail } from "./prompt";
 import { ModelProviderError } from "./providers";
@@ -319,6 +322,43 @@ function claimsNothingWasFound(text: string): boolean {
 }
 
 /**
+ * A frequency superlative — the claim a tied ranking cannot support.
+ *
+ * Narrow on purpose. "Most" on its own is ordinary English ("most of them are
+ * closed") and matching it would question half of every answer; these are the
+ * phrasings that specifically assert *this value occurs more often than the
+ * others*, which is the only claim at issue.
+ */
+const NAMES_A_MOST_COMMON =
+  /\bmost[\s-](?:used|common|commonly|frequent|frequently|often|reported|recorded|logged|cited|occurring|repeated)\b|\bcommonest\b|\bsingle most\b/i;
+
+/**
+ * Any acknowledgement that there was no winner to name.
+ *
+ * Deliberately wide, where the pattern above is narrow, because the two are
+ * used together and the asymmetry decides which way the mistakes fall. A
+ * missed correction costs a round trip; arguing with an answer that already
+ * said "every value appears once, so there is no most used one" would be
+ * telling the model the thing it just told the reader.
+ */
+const ACKNOWLEDGES_NO_WINNER =
+  /\bno (?:single |clear |one )?most\b|\bno most[\s-]\w+\b|\bno mode\b|\btie[ds]?\b|\bonce each\b|\b(?:only|just|exactly) once\b|\bevery (?:value|observation|row|entry|finding|record)\b|\beach (?:value|observation|row|entry|finding|record)\b|\bno value\b|\bunique\b|\bdistinct value\b|\bdoes not repeat\b|\bnothing repeats\b/i;
+
+/**
+ * Did this turn name a most-common value?
+ *
+ * The same construction as `claimsNothingWasFound` and safe for the same
+ * reason: the pattern alone guesses, and it is only ever used cross-checked
+ * against a structural fact about the query behind it — here, a ranking whose
+ * top tally is 1. Against that, "the most used observation is X" is not a
+ * phrasing worth arguing with, it is a claim that cannot be true.
+ */
+function claimsAMostCommonValue(text: string): boolean {
+  const prose = withoutFencedBlocks(text);
+  return NAMES_A_MOST_COMMON.test(prose) && !ACKNOWLEDGES_NO_WINNER.test(prose);
+}
+
+/**
  * Why this turn should be asked again with the tool made mandatory, or null to
  * accept it as it stands.
  *
@@ -582,6 +622,19 @@ export async function* runAgent(input: AgentRunInput): AsyncGenerator<AgentEvent
   let lastQueryOtherDateColumns: string | null = null;
   let dateColumnCorrected = false;
   /**
+   * Set when the most recent query ranked groups by count and the top row was
+   * not the winner it looks like — see `rankingWithoutAWinner`. Overwritten by
+   * each query, like the notes above it.
+   */
+  let lastQueryNoWinner: string | null = null;
+  /**
+   * And whether that was the degenerate case, where the top tally is 1 and so
+   * nothing repeats at all. Only that case is retried: it is the one where
+   * naming a most-common value is not a judgment call but a false statement.
+   */
+  let lastQueryNothingRepeats = false;
+  let noWinnerCorrected = false;
+  /**
    * Every value this database has shown the model: the schema's value lists,
    * plus the cells of every result read so far. This is what a filter literal
    * has to be backed by before an empty result may be called an absence.
@@ -775,8 +828,20 @@ export async function* runAgent(input: AgentRunInput): AsyncGenerator<AgentEvent
          * told the count instead, which is the one fact it is contradicting.
          * The correction lives in this run's `messages` only; stored history is
          * rebuilt from the conversation, so nothing synthetic is persisted.
+         *
+         * Off once the no-winner branch below has spoken. The answer that
+         * branch asks for is itself a negation about the rows — "no observation
+         * text repeats", "there is no most used one" — and the row count is not
+         * a contradiction of that. Leaving this on would take the corrected
+         * answer and push the model straight back to the claim it just
+         * withdrew: "your last query returned 1 row, so the data is there".
          */
-        if (!contradictionCorrected && !lastQueryFoundNothing && claimsNothingWasFound(answer)) {
+        if (
+          !contradictionCorrected &&
+          !noWinnerCorrected &&
+          !lastQueryFoundNothing &&
+          claimsNothingWasFound(answer)
+        ) {
           contradictionCorrected = true;
           yield emit({
             label: "Said nothing was found when rows came back — retrying",
@@ -789,6 +854,51 @@ export async function* runAgent(input: AgentRunInput): AsyncGenerator<AgentEvent
             content:
               `Your last query returned ${lastQueryRowCount} row${lastQueryRowCount === 1 ? "" : "s"}, so the data is there. ` +
               `Answer from those rows and quote what they say. Do not report that nothing was found.`,
+          });
+          answer = "";
+          reasoning = "";
+          yield { type: "reset" };
+          continue;
+        }
+
+        /**
+         * The answer names a most-common value, and the ranking behind it has
+         * a top tally of 1 — so every value occurs once, and the row that
+         * sorted first is an arbitrary tie-break rather than a winner. This is
+         * the opposite failure to the one above: there the rows were there and
+         * the answer denied them, here the row is there and the answer claims
+         * something of it that a tie cannot support.
+         *
+         * Gated on the degenerate case only. A tie further up (four categories
+         * at 40 rows each) is a judgment call about how to report it, and the
+         * note in the payload is the right weight for that. A top tally of 1 is
+         * not a judgment call: there is no most-used value to name, so the
+         * sentence is false however it is phrased.
+         *
+         * Not `tool_choice: "required"`, unlike the absence retries. The model
+         * may need a different query — group by a column whose values actually
+         * repeat — but it may equally answer correctly with no query at all, by
+         * telling the reader this column holds one distinct value per record.
+         * Forcing a tool would rule out the better of the two answers.
+         */
+        if (
+          !noWinnerCorrected &&
+          lastQueryNothingRepeats &&
+          lastQueryNoWinner &&
+          claimsAMostCommonValue(answer)
+        ) {
+          noWinnerCorrected = true;
+          yield emit({
+            label: "Named a most-common value where nothing repeats — retrying",
+            status: "done",
+            detail: lastQueryNoWinner,
+            query_id: null,
+          });
+          messages.push({
+            role: "user",
+            content:
+              `${lastQueryNoWinner} Answer again on that basis. If you run another query, say which ` +
+              `column you grouped by; if you do not, say plainly that there is no most common value here.`,
           });
           answer = "";
           reasoning = "";
@@ -1063,6 +1173,16 @@ export async function* runAgent(input: AgentRunInput): AsyncGenerator<AgentEvent
           lastQueryOtherDateColumns = otherDates
             ? otherDateColumnsNote(otherDates.filtered, otherDates.others)
             : null;
+          // Judged on the full result rather than the trimmed copy: the rows
+          // are ordered descending, so the trim cannot change which tally is
+          // top, and the untrimmed rows say how many groups tie for it.
+          const ranking = rankingWithoutAWinner(
+            sql,
+            result.columns.map((column) => column.name),
+            result.rows
+          );
+          lastQueryNoWinner = ranking ? noWinnerNote(ranking) : null;
+          lastQueryNothingRepeats = ranking?.nothingRepeats ?? false;
           for (const value of vouchedFrom(result.rows)) vouched.add(value);
           yield emit({
             label: purpose || "Ran query",
@@ -1075,7 +1195,14 @@ export async function* runAgent(input: AgentRunInput): AsyncGenerator<AgentEvent
             toolCallId: call.id,
             toolName: call.name,
             content: JSON.stringify(
-              summarize(result, sql, target.schema, unvouched, lastQueryOtherDateColumns)
+              summarize(
+                result,
+                sql,
+                target.schema,
+                unvouched,
+                lastQueryOtherDateColumns,
+                lastQueryNoWinner
+              )
             ),
             isError: false,
           });
@@ -1115,19 +1242,6 @@ export async function* runAgent(input: AgentRunInput): AsyncGenerator<AgentEvent
   } catch (error) {
     yield { type: "failed", error: translate(error), steps };
   }
-}
-
-/**
- * Trims a result set to what is useful in context.
- *
- * The model needs enough rows to describe the shape and cite specifics; it does
- * not need ten thousand of them, and sending them would burn the context window
- * for nothing. The user still gets the full result — this trim only applies to
- * what goes back into the conversation.
- */
-/** Keywords inside quoted text are not keywords. Blank the literals first. */
-function withoutLiterals(sql: string): string {
-  return sql.replace(/'(?:[^']|'')*'/g, "''").replace(/"(?:[^"]|"")*"/g, '""');
 }
 
 /**
@@ -1302,12 +1416,22 @@ function rowsInContext(rows: unknown[][]): { rows: unknown[][]; heldForSize: boo
   return { rows: kept, heldForSize: kept.length < capped.length };
 }
 
+/**
+ * Trims a result set to what is useful in context, with what it does and does
+ * not establish alongside.
+ *
+ * The model needs enough rows to describe the shape and cite specifics; it does
+ * not need ten thousand of them, and sending them would burn the context window
+ * for nothing. The user still gets the full result — this trim only applies to
+ * what goes back into the conversation.
+ */
 function summarize(
   result: QueryResult,
   sql: string,
   schema: SchemaTable[] | null,
   unvouched: string[] = [],
-  otherDateColumns: string | null = null
+  otherDateColumns: string | null = null,
+  ranking: string | null = null
 ) {
   const { rows, heldForSize } = rowsInContext(result.rows);
   const sampling = samplingNote(sql, result, heldForSize);
@@ -1323,6 +1447,7 @@ function summarize(
     ...(typeMismatch ? { column_type_warning: typeMismatch } : {}),
     ...(unvouched.length ? { unverified_filter: unverifiedFilterNote(unvouched) } : {}),
     ...(otherDateColumns ? { other_date_columns: otherDateColumns } : {}),
+    ...(ranking ? { ranking_has_no_winner: ranking } : {}),
   };
 }
 
