@@ -11,6 +11,31 @@ import {
 } from "@/lib/export";
 import { BlockToolbar } from "./BlockToolbar";
 
+/**
+ * mermaid's grammar rejects a literal `(`/`)` inside unquoted `[...]`/`{...}`
+ * node text or `|...|` edge text (it conflicts with the parens that denote a
+ * round/cylinder node shape) -- e.g. `A[Text (detail)]` fails to parse, while
+ * `A["Text (detail)"]` is fine. The model writes plain parenthetical asides
+ * constantly ("(PPE)", "(~5m)") with no reason to know that rule, and one bad
+ * label used to fail the whole diagram. Quote just the labels that need it.
+ */
+function sanitizeMermaidChart(chart: string): string {
+  const quote = (inner: string) => `"${inner.replace(/"/g, '\\"')}"`;
+  const quoteIfRisky = (delimiterOpen: string, delimiterClose: string) => (match: string, inner: string) => {
+    const trimmed = inner.trim();
+    if (trimmed === "" || /^".*"$/.test(trimmed)) return match;
+    // A label that is itself fully wrapped in parens, e.g. the `(cylinder)`
+    // in `[(cylinder)]`, is shape syntax, not text -- leave it alone.
+    if (trimmed.startsWith("(") && trimmed.endsWith(")")) return match;
+    if (!/[()]/.test(inner)) return match;
+    return `${delimiterOpen}${quote(inner)}${delimiterClose}`;
+  };
+  return chart
+    .replace(/\[([^[\]]*)\]/g, quoteIfRisky("[", "]"))
+    .replace(/\{([^{}]*)\}/g, quoteIfRisky("{", "}"))
+    .replace(/\|([^|]*)\|/g, quoteIfRisky("|", "|"));
+}
+
 export function MermaidBlock({
   chart,
   name = "diagram",
@@ -51,7 +76,7 @@ export function MermaidBlock({
     });
 
     mermaid
-      .render(`mermaid-${rawId}`, chart)
+      .render(`mermaid-${rawId}`, sanitizeMermaidChart(chart))
       .then(({ svg }) => {
         if (!cancelled) setSvg(svg);
       })
