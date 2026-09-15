@@ -30,6 +30,14 @@ export function MermaidBlock({
 
     mermaid.initialize({
       startOnLoad: false,
+      // Without this, mermaid swallows a parse/render error and resolves with
+      // its own oversized built-in "syntax error" diagram instead of
+      // rejecting — our .catch() below never fires, so that big error graphic
+      // renders as if it were real output. It also skips cleaning up the temp
+      // node it appends to document.body on that path, which can then collide
+      // with the next render attempt and only clear on a full page refresh.
+      // suppressErrorRendering makes it clean up and actually reject instead.
+      suppressErrorRendering: true,
       theme: "base",
       themeVariables: {
         primaryColor: isDark ? "#12293c" : "#e3f1fd",

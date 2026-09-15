@@ -58,11 +58,16 @@ export function ChatWorkspace() {
   const profile = useProfile();
   const [input, setInput] = useState("");
   const [attachments, setAttachments] = useState<Attachment[]>([]);
-  const [running, setRunning] = useState(false);
-  const [liveSteps, setLiveSteps] = useState<AgentStep[]>([]);
+  // Keyed by conversation id -- otherwise a run started in one chat leaves
+  // this state true/populated while the user has switched to another chat,
+  // and "Analyzing database" (plus the disabled composer) shows up there too.
+  const [runningIds, setRunningIds] = useState<Set<string>>(new Set());
+  const [stepsByConversation, setStepsByConversation] = useState<Record<string, AgentStep[]>>({});
   const bottomRef = useRef<HTMLDivElement>(null);
 
   const messages = activeConversation.messages;
+  const running = runningIds.has(activeConversation.id);
+  const liveSteps = stepsByConversation[activeConversation.id] ?? [];
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: "smooth" });
@@ -70,7 +75,7 @@ export function ChatWorkspace() {
 
   async function send(text: string) {
     const trimmed = text.trim();
-    if (!trimmed || running || !activeConversation.id) return;
+    if (!trimmed || !activeConversation.id || runningIds.has(activeConversation.id)) return;
 
     const conversationId = activeConversation.id;
     const userMessageId = crypto.randomUUID();
@@ -78,8 +83,8 @@ export function ChatWorkspace() {
 
     setInput("");
     setAttachments([]);
-    setLiveSteps([]);
-    setRunning(true);
+    setStepsByConversation((prev) => ({ ...prev, [conversationId]: [] }));
+    setRunningIds((prev) => new Set(prev).add(conversationId));
 
     try {
       // Otherwise a message sent the instant a conversation is opened can
@@ -116,7 +121,10 @@ export function ChatWorkspace() {
       for await (const { event, data } of parseSse(res.body)) {
         const payload = JSON.parse(data);
         if (event === "run.step") {
-          setLiveSteps((prev) => [...prev, payload.step]);
+          setStepsByConversation((prev) => ({
+            ...prev,
+            [conversationId]: [...(prev[conversationId] ?? []), payload.step],
+          }));
         } else if (event === "run.content_reset") {
           // The agent is retrying this turn; what arrived so far is being
           // replaced, not continued — the discarded turn's reasoning goes too.
@@ -171,8 +179,15 @@ export function ChatWorkspace() {
         streaming: false,
       });
     } finally {
-      setRunning(false);
-      setLiveSteps([]);
+      setRunningIds((prev) => {
+        const next = new Set(prev);
+        next.delete(conversationId);
+        return next;
+      });
+      setStepsByConversation((prev) => {
+        const { [conversationId]: _discard, ...rest } = prev;
+        return rest;
+      });
     }
   }
 

@@ -28,20 +28,11 @@ import type { ExecutedQuery } from "./sql/executed";
  * the rows it returned. That is the whole point of the component — what is on
  * screen is the statement the database received, not a retyping of it.
  */
-export function ExecutedQueryBlock({
-  query,
-  defaultOpen = false,
-}: {
-  query: ExecutedQuery;
-  /**
-   * Open on the newest message, collapsed in history. A reader watching an
-   * answer arrive wants the rows; a reader scrolling back wants the prose. It
-   * also removes the model's reason to paste the result set into its reply —
-   * data it cannot see on screen is data it will try to show you itself.
-   */
-  defaultOpen?: boolean;
-}) {
-  const [open, setOpen] = useState(defaultOpen);
+export function ExecutedQueryBlock({ query }: { query: ExecutedQuery }) {
+  // Collapsed by default, on every message including the newest — the SQL is
+  // how the answer was produced, not the answer itself. The reader who wants
+  // to check the work can expand it.
+  const [open, setOpen] = useState(false);
   const contentRef = useRef<HTMLDivElement>(null);
   const base = safeFilename(query.label ?? "query", "query");
 

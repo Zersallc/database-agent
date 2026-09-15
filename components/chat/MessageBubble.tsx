@@ -119,7 +119,7 @@ export function MessageBubble({
       ) : (
         <div className="min-w-0 flex-1 text-sm">
           {queries.map((query) => (
-            <ExecutedQueryBlock key={query.id} query={query} defaultOpen={isLatest} />
+            <ExecutedQueryBlock key={query.id} query={query} />
           ))}
           {message.thinking && <ThinkingBlock thinking={message.thinking} />}
           <Markdown
