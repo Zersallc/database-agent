@@ -118,8 +118,14 @@ export function MessageBubble({
         </>
       ) : (
         <div className="min-w-0 flex-1 text-sm">
-          {queries.map((query) => (
-            <ExecutedQueryBlock key={query.id} query={query} />
+          {queries.map((query, index) => (
+            <ExecutedQueryBlock
+              key={query.id}
+              query={query}
+              // The last query of a run is the one the answer rests on; the
+              // ones before it are schema and value lookups on the way there.
+              showResults={index === queries.length - 1}
+            />
           ))}
           {message.thinking && <ThinkingBlock thinking={message.thinking} />}
           <Markdown

@@ -99,6 +99,8 @@ provider of its own, and exist for deployments configured entirely through env
 | `AGENT_EFFORT` | `high` | Anthropic only: `low` \| `medium` \| `high` \| `xhigh` \| `max` |
 | `AGENT_MAX_TOKENS` | 32000 | |
 | `AGENT_MAX_ITERATIONS` | 12 | Model↔tool round trips before the loop gives up |
+| `AGENT_TEMPERATURE` | 0.6 thinking / 0.7 not | OpenAI-compatible only. `default` sends no temperature at all |
+| `AGENT_TOP_P` | 0.95 thinking / 0.8 not | OpenAI-compatible only. `default` sends no `top_p` at all |
 | `MODEL_REQUEST_TIMEOUT_MS` | 300000 | Generous: a slow local model legitimately takes minutes |
 
 Two adapters cover the field. `anthropic` speaks Claude's Messages API through

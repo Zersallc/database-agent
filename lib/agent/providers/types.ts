@@ -87,6 +87,21 @@ export type ModelRequest = {
    */
   enableThinking: boolean;
   /**
+   * Sampling, or null to send neither field and leave the provider on its own
+   * defaults.
+   *
+   * Null was the only behavior before these existed, and it is not a neutral
+   * one: it hands the answer's variance to whatever `generation_config.json`
+   * the server happens to load, which this app cannot see and did not choose.
+   * A thinking model and a non-thinking one also want different values, so the
+   * caller sets them per run rather than the adapter fixing one pair.
+   *
+   * Anthropic ignores both: its adaptive thinking requires the default
+   * temperature, and overriding it is an error rather than a preference.
+   */
+  temperature: number | null;
+  topP: number | null;
+  /**
    * Whether the model may choose not to call a tool.
    *
    * "auto" is the normal answer and the default: a greeting must be allowed to

@@ -31,6 +31,11 @@ export async function llmJudge(
     maxTokens: 300,
     effort: "low",
     enableThinking: false,
+    // A grader has to be as close to reproducible as the provider allows, or
+    // the same reply passes one run and fails the next and the pass rate stops
+    // meaning anything.
+    temperature: 0,
+    topP: 1,
   })) {
     if (event.type === "turn") text = event.turn.text;
   }

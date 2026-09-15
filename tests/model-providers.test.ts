@@ -16,6 +16,7 @@ import { toAnthropicMessages } from "@/lib/agent/providers/anthropic";
 import {
   mapFinishReason,
   readServerSentEvents,
+  StreamAccumulator,
   toOpenAiMessages,
   toOpenAiTool,
 } from "@/lib/agent/providers/openai-compatible";
@@ -276,5 +277,70 @@ describe("presets", () => {
     assert.equal(findPreset("ollama")?.keyOptional, true);
     assert.equal(findPreset("qwen")?.keyOptional, false);
     assert.equal(findPreset("anthropic")?.keyOptional, false);
+  });
+});
+
+/**
+ * Where a thinking model's reasoning arrives, and where it must not end up.
+ *
+ * A server with a reasoning parser configured (`--reasoning-parser qwen3` on
+ * vLLM, as the deployment this runs against now has) stops inlining
+ * `<think>...</think>` into `content` and returns the reasoning in its own
+ * field instead. Reading only `content` after that does not fail — it silently
+ * drops every reasoning token, which is what made the "Show thinking" toggle
+ * vanish from answers that had definitely thought.
+ */
+describe("StreamAccumulator", () => {
+  const chunk = (delta: Record<string, unknown>) => ({ choices: [{ index: 0, delta }] });
+
+  test("answer text comes back as text, with no reasoning", () => {
+    const accumulator = new StreamAccumulator();
+    assert.deepEqual(accumulator.consume(chunk({ content: "63 rows" })), {
+      text: "63 rows",
+      reasoning: "",
+    });
+  });
+
+  test("vLLM, SGLang and DeepSeek put reasoning in reasoning_content", () => {
+    const accumulator = new StreamAccumulator();
+    assert.deepEqual(accumulator.consume(chunk({ reasoning_content: "let me check" })), {
+      text: "",
+      reasoning: "let me check",
+    });
+  });
+
+  test("OpenRouter puts it in reasoning", () => {
+    const accumulator = new StreamAccumulator();
+    assert.deepEqual(accumulator.consume(chunk({ reasoning: "let me check" })), {
+      text: "",
+      reasoning: "let me check",
+    });
+  });
+
+  test("reasoning never reaches the turn's text", () => {
+    // `ModelTurn.text` is the answer that gets stored and replayed as history.
+    // Reasoning belongs beside the answer, never as it.
+    const accumulator = new StreamAccumulator();
+    accumulator.consume(chunk({ reasoning_content: "the user wants a count. " }));
+    accumulator.consume(chunk({ content: "There are 63." }));
+    accumulator.consume({ choices: [{ index: 0, delta: {}, finish_reason: "stop" }] });
+
+    const turn = accumulator.finish("qwen3-14b");
+    assert.equal(turn.text, "There are 63.");
+    assert.equal(turn.stopReason, "end_turn");
+  });
+
+  test("a chunk carrying only bookkeeping emits neither", () => {
+    const accumulator = new StreamAccumulator();
+    assert.deepEqual(accumulator.consume({ usage: { prompt_tokens: 10, completion_tokens: 2 } }), {
+      text: "",
+      reasoning: "",
+    });
+    assert.deepEqual(
+      accumulator.consume(
+        chunk({ tool_calls: [{ index: 0, id: "call_1", function: { name: "run_sql", arguments: "{}" } }] })
+      ),
+      { text: "", reasoning: "" }
+    );
   });
 });

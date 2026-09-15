@@ -174,6 +174,11 @@ export class OpenAiCompatibleModelClient implements ModelClient {
         // DeepSeek, Groq, ...) never see it and today's behavior is
         // unchanged unless someone opts in.
         ...(request.enableThinking ? { chat_template_kwargs: { enable_thinking: true } } : {}),
+        // Omitted rather than defaulted when null, so a provider that rejects
+        // a custom temperature outright (OpenAI's reasoning models) can still
+        // be used — see AGENT_TEMPERATURE in lib/agent/index.ts.
+        ...(request.temperature !== null ? { temperature: request.temperature } : {}),
+        ...(request.topP !== null ? { top_p: request.topP } : {}),
       }),
     });
 
@@ -201,7 +206,8 @@ export class OpenAiCompatibleModelClient implements ModelClient {
         );
       }
 
-      const text = accumulator.consume(chunk);
+      const { text, reasoning } = accumulator.consume(chunk);
+      if (reasoning) yield { type: "thinking_delta", text: reasoning };
       if (text) yield { type: "text_delta", text };
     }
 
@@ -209,14 +215,23 @@ export class OpenAiCompatibleModelClient implements ModelClient {
   }
 }
 
+/** What one chunk resolved to: answer text, reasoning, or neither. */
+type ChunkText = { text: string; reasoning: string };
+
+/** A chunk carrying only bookkeeping — usage, a finish reason, a tool-call fragment. */
+const NOTHING: ChunkText = { text: "", reasoning: "" };
+
 /**
  * Reassembles one streamed completion.
  *
  * Tool calls are the fiddly part: `function.arguments` arrives as JSON split
  * across arbitrarily many chunks, keyed only by an array index, so it has to be
  * concatenated per index and parsed once at the end.
+ *
+ * Exported for the tests, which drive it chunk by chunk rather than standing up
+ * a fake HTTP server to reach it through `stream()`.
  */
-class StreamAccumulator {
+export class StreamAccumulator {
   private text = "";
   private finishReason: string | null = null;
   private usage: { input_tokens: number; output_tokens: number } | null = null;
@@ -224,7 +239,7 @@ class StreamAccumulator {
   private readonly calls = new Map<number, { id: string; name: string; args: string }>();
 
   /** Folds one chunk in and returns any new text to emit. */
-  consume(chunk: any): string {
+  consume(chunk: any): ChunkText {
     if (chunk.model) this.model = chunk.model;
 
     if (chunk.usage) {
@@ -235,7 +250,7 @@ class StreamAccumulator {
     }
 
     const choice = chunk.choices?.[0];
-    if (!choice) return "";
+    if (!choice) return NOTHING;
     if (choice.finish_reason) this.finishReason = choice.finish_reason;
 
     for (const call of choice.delta?.tool_calls ?? []) {
@@ -248,12 +263,28 @@ class StreamAccumulator {
       });
     }
 
-    const delta = choice.delta?.content;
-    if (typeof delta === "string" && delta) {
-      this.text += delta;
-      return delta;
-    }
-    return "";
+    /**
+     * A reasoning model's thinking, in the field the server's reasoning parser
+     * put it in. vLLM and SGLang (`--reasoning-parser`) and DeepSeek use
+     * `reasoning_content`; OpenRouter uses `reasoning`. Without a parser
+     * configured the same text arrives inline in `content` wrapped in
+     * `<think>` tags, which `ThinkFilter` in lib/agent/index.ts splits out —
+     * the two paths read different fields and cannot both fire on one chunk.
+     *
+     * Deliberately not added to `this.text`: that becomes `ModelTurn.text`,
+     * which is the answer that gets stored and replayed as history. Reasoning
+     * is shown beside the answer, never as it.
+     */
+    const delta = choice.delta ?? {};
+    const reasoning = delta.reasoning_content ?? delta.reasoning;
+    const content = delta.content;
+
+    const out = {
+      text: typeof content === "string" ? content : "",
+      reasoning: typeof reasoning === "string" ? reasoning : "",
+    };
+    this.text += out.text;
+    return out;
   }
 
   finish(requestedModel: string): ModelTurn {

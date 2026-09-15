@@ -59,6 +59,42 @@ export function sqlNeverMatches(outcome: EvalOutcome, pattern: RegExp | string, 
   };
 }
 
+/** The final answer contains `value` — for a fact it had to read rather than invent. */
+export function answerMentions(outcome: EvalOutcome, value: string, why: string): GradeResult {
+  const pass = outcome.finalText.toLowerCase().includes(value.toLowerCase());
+  return {
+    pass,
+    reason: pass ? `the answer named "${value}" (${why})` : `the answer never names "${value}" — ${why}`,
+  };
+}
+
+/**
+ * The answer does not retype the result set at it.
+ *
+ * The rows are on screen in a sortable, exportable table directly above the
+ * answer, so a prose list of them is the same data twice — and the handful the
+ * model picks are not the ones the reader would have picked. Naming one or two
+ * as examples is the legitimate version of this, which is what `max` allows
+ * for; ten is the failure.
+ */
+export function retypesRows(
+  outcome: EvalOutcome,
+  values: string[],
+  max: number
+): GradeResult {
+  const answer = outcome.finalText.toLowerCase();
+  const quoted = values.filter((value) => answer.includes(value.toLowerCase()));
+  return {
+    pass: quoted.length <= max,
+    reason:
+      quoted.length <= max
+        ? `${quoted.length} row value(s) named, within the ${max} allowed as examples`
+        : `${quoted.length} of ${values.length} row values were retyped into the prose (at most ${max} should be): ${quoted
+            .slice(0, 5)
+            .join(", ")}…`,
+  };
+}
+
 /** ANDs several grades together; the reason names every failing one. */
 export function allOf(...grades: GradeResult[]): GradeResult {
   const failed = grades.filter((g) => !g.pass);

@@ -35,6 +35,43 @@ const MAX_ITERATIONS = Number(process.env.AGENT_MAX_ITERATIONS ?? 12);
 /** Rows handed back to the model per query. The full result still reaches the user. */
 const ROWS_IN_CONTEXT = 100;
 
+/**
+ * Sampling, per thinking mode.
+ *
+ * Qwen3's published recommendations, and they differ by mode for a reason: the
+ * same values that keep a non-thinking answer tight send a thinking one into
+ * repetition loops. Sending nothing — which is what this did before — is not
+ * the neutral option it looks like. It leaves the variance to whatever
+ * `generation_config.json` the server loaded, so two deployments of the same
+ * model answer differently and neither is a choice anyone here made.
+ *
+ * `AGENT_TEMPERATURE=default` (or `AGENT_TOP_P=default`) sends the field not at
+ * all, for a provider that rejects a custom value rather than honoring it.
+ */
+const SAMPLING = {
+  thinking: { temperature: 0.6, topP: 0.95 },
+  nonThinking: { temperature: 0.7, topP: 0.8 },
+} as const;
+
+/** An env override, `null` for "send nothing", or `undefined` to use the mode default. */
+function samplingOverride(raw: string | undefined): number | null | undefined {
+  if (raw === undefined || raw.trim() === "") return undefined;
+  if (raw.trim().toLowerCase() === "default") return null;
+  const value = Number(raw);
+  return Number.isFinite(value) ? value : undefined;
+}
+
+/** Temperature and top_p for one run, env override winning over the mode default. */
+function samplingFor(enableThinking: boolean): { temperature: number | null; topP: number | null } {
+  const defaults = enableThinking ? SAMPLING.thinking : SAMPLING.nonThinking;
+  const temperature = samplingOverride(process.env.AGENT_TEMPERATURE);
+  const topP = samplingOverride(process.env.AGENT_TOP_P);
+  return {
+    temperature: temperature === undefined ? defaults.temperature : temperature,
+    topP: topP === undefined ? defaults.topP : topP,
+  };
+}
+
 export type AgentStep = {
   label: string;
   status: "pending" | "active" | "done" | "failed";
@@ -173,6 +210,58 @@ function statesUngroundedFigure(text: string, grounded: string[]): boolean {
 }
 
 /**
+ * The values this turn put in quotes.
+ *
+ * Quoted, and only quoted. `**bold**` is how the model writes a label or an
+ * emphasis — "**Status**: Closed" — and reading those as data would question
+ * half of every well-formatted answer. A quoted string is the one place it is
+ * saying *this is the value the database holds*, which is the claim worth
+ * checking.
+ */
+function quotedValuesIn(text: string): string[] {
+  const prose = withoutFencedBlocks(text);
+  const found = new Set<string>();
+
+  for (const match of prose.matchAll(/["“]([^"”\n]{3,})["”]/g)) {
+    const value = match[1].trim();
+    // A figure in quotes is `statesUngroundedFigure`'s to judge, and it reads
+    // numbers far more carefully than a substring match could.
+    if (/[a-z]/i.test(value)) found.add(value);
+  }
+
+  return [...found];
+}
+
+/**
+ * Did this turn quote a value that exists nowhere it could have read one?
+ *
+ * The same shape as `statesUngroundedFigure` and for the same reason — the
+ * fabrication that prompted it was `Employee Name: "Ahmed Al-Maktoum"`, stated
+ * with no query behind it, on a run where every existing check passed because a
+ * name carries no digit.
+ *
+ * `sources` is wider here than for figures, and deliberately: it includes the
+ * system prompt, so quoting a table name, a column name, or one of the values
+ * the schema lists for a column is grounded by the schema itself. Figures keep
+ * the narrower list — the schema carries row estimates, and letting those vouch
+ * for numbers would switch that check off.
+ *
+ * Substring, in that direction: a quoted "health or hygiene" is vouched by the
+ * schema's `Health or Hygiene or Ergonomic Hazards`, because the model is
+ * naming something real in shorter words. The reverse never vouches.
+ */
+function quotesUngroundedValue(text: string, sources: string[]): boolean {
+  const quoted = quotedValuesIn(text);
+  if (quoted.length === 0) return false;
+
+  const haystack = sources.map((source) => source.toLowerCase());
+  return quoted.some((value) => {
+    const probe = value.toLowerCase();
+    return !haystack.some((source) => source.includes(probe));
+  });
+}
+
+/**
  * Did this turn promise to act and then stop?
  *
  * "I will run a query to get that" followed by no tool call is not an answer;
@@ -225,11 +314,22 @@ function claimsNothingWasFound(text: string): boolean {
  * promises nothing, so it reads exactly like a grounded answer here and this
  * predicate will never catch it. It is handled off the prose entirely, against
  * the literals the query filtered on; see `evidence.ts`.
+ *
+ * `valueSources` is `grounded` plus the system prompt — see
+ * `quotesUngroundedValue` for why the schema vouches for a quoted value but
+ * must not vouch for a figure.
  */
-function unbackedAnswerReason(text: string, grounded: string[]): string | null {
+function unbackedAnswerReason(
+  text: string,
+  grounded: string[],
+  valueSources: string[]
+): string | null {
   if (/```(table|chart)\b/.test(text)) return "The reply presented data that no query produced.";
   if (statesUngroundedFigure(text, grounded)) {
     return "The reply stated a figure that no query in this conversation produced.";
+  }
+  if (quotesUngroundedValue(text, valueSources)) {
+    return "The reply quoted a value that no query in this conversation returned.";
   }
   if (promisesAnActionItDidNotTake(text)) {
     return "The reply said it would run a query and then did not.";
@@ -482,6 +582,12 @@ export async function* runAgent(input: AgentRunInput): AsyncGenerator<AgentEvent
    * standard the reader was held to.
    */
   const grounded = [input.question, ...input.history.map((message) => message.content)];
+  /**
+   * The same sources plus the schema, for quoted values only. A column name or
+   * one of the values the schema lists for a column is something the model read
+   * rather than invented, and `renderValues` puts plenty of both in front of it.
+   */
+  const valueSources = [...grounded, system];
   let inputTokens = 0;
   let outputTokens = 0;
 
@@ -497,6 +603,7 @@ export async function* runAgent(input: AgentRunInput): AsyncGenerator<AgentEvent
         maxTokens: MAX_TOKENS,
         effort: input.effort ?? "high",
         enableThinking: input.enableThinking ?? false,
+        ...samplingFor(input.enableThinking ?? false),
         toolChoice,
       })) {
         if (event.type === "text_delta") {
@@ -597,7 +704,7 @@ export async function* runAgent(input: AgentRunInput): AsyncGenerator<AgentEvent
          */
         const unbacked =
           !forcedRetryUsed && toolCallsMade === 0 && tools.length > 0
-            ? unbackedAnswerReason(answer, grounded)
+            ? unbackedAnswerReason(answer, grounded, valueSources)
             : null;
 
         if (unbacked) {

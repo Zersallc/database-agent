@@ -5,6 +5,8 @@ import { silentFixNoRenarration } from "./silent-fix-no-renarration.eval";
 import { namingAbbreviatedTable } from "./naming-abbreviated-table.eval";
 import { namingMultiConnectionAmbiguous } from "./naming-multi-connection-ambiguous.eval";
 import { namingDecoyTable } from "./naming-decoy-table.eval";
+import { answerShape } from "./answer-shape.eval";
+import { noInventedAttribution } from "./no-invented-attribution.eval";
 import type { EvalCase } from "../types";
 
 export const ALL_CASES: EvalCase[] = [
@@ -15,4 +17,6 @@ export const ALL_CASES: EvalCase[] = [
   namingAbbreviatedTable,
   namingMultiConnectionAmbiguous,
   namingDecoyTable,
+  answerShape,
+  noInventedAttribution,
 ];
