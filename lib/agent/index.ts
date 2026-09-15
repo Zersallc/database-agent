@@ -36,6 +36,25 @@ const MAX_ITERATIONS = Number(process.env.AGENT_MAX_ITERATIONS ?? 12);
 const ROWS_IN_CONTEXT = 100;
 
 /**
+ * Characters of row data handed back per query, and the longest single cell.
+ *
+ * A row cap alone is not a size cap, and the difference is the whole of this:
+ * 100 rows of `category, count` is a few hundred characters, while 100 rows of
+ * `SELECT *` over a table with narrative text columns came to 188,000 — about
+ * 62,900 tokens against a 32,768 window, or roughly twice the context the model
+ * has. The request never reaches generation. It fails at the provider with an
+ * error about output tokens, which is the reservation the oversized prompt left
+ * no room for rather than the thing that was actually wrong.
+ *
+ * Neither number touches what the reader sees. The table is rendered from the
+ * query record, so a `SELECT *` still shows every column and every row it
+ * returned; this is only the copy the model reasons over, and it does not need
+ * a hundred full incident reports to say what they have in common.
+ */
+const RESULT_CHARS_IN_CONTEXT = Number(process.env.AGENT_RESULT_CHARS ?? 12000);
+const CELL_CHARS_IN_CONTEXT = Number(process.env.AGENT_CELL_CHARS ?? 400);
+
+/**
  * Sampling, per thinking mode.
  *
  * Qwen3's published recommendations, and they differ by mode for a reason: the
@@ -1066,10 +1085,10 @@ function withoutLiterals(sql: string): string {
  * fact in the payload the model is already reading, next to the rows it is
  * reasoning from — the arbitrariness of the sample stated where the sample is.
  */
-function samplingNote(sql: string, result: QueryResult): string | null {
+function samplingNote(sql: string, result: QueryResult, heldForSize = false): string | null {
   const bare = withoutLiterals(sql).toLowerCase();
   const arbitrary = /\blimit\s+\d/.test(bare) && !/\border\s+by\b/.test(bare);
-  const held = result.truncated || result.rows.length > ROWS_IN_CONTEXT;
+  const held = result.truncated || result.rows.length > ROWS_IN_CONTEXT || heldForSize;
 
   if (arbitrary) {
     return (
@@ -1167,15 +1186,47 @@ function dateColumnMismatchNote(sql: string, schema: SchemaTable[] | null): stri
   );
 }
 
+/**
+ * One cell, shortened to what identifies it — with the shortening stated in
+ * the value rather than done quietly, so the model never reads a cut-off
+ * incident report as the whole of one and quotes it back as complete.
+ */
+function cellInContext(value: unknown): unknown {
+  if (typeof value !== "string" || value.length <= CELL_CHARS_IN_CONTEXT) return value;
+  return `${value.slice(0, CELL_CHARS_IN_CONTEXT)}… [truncated, ${value.length} characters in full — the reader has all of it in the table]`;
+}
+
+/**
+ * As many rows as fit `RESULT_CHARS_IN_CONTEXT`, each trimmed cell by cell.
+ *
+ * Always at least one row, even when that row alone is over budget: a result
+ * the model cannot see at all is worse than one it can see the shape of, and
+ * `rows_shown` next to `row_count` is what tells it which it is looking at.
+ */
+function rowsInContext(rows: unknown[][]): { rows: unknown[][]; heldForSize: boolean } {
+  const capped = rows.slice(0, ROWS_IN_CONTEXT).map((row) => row.map(cellInContext));
+  const kept: unknown[][] = [];
+  let used = 0;
+
+  for (const row of capped) {
+    used += JSON.stringify(row).length;
+    if (used > RESULT_CHARS_IN_CONTEXT && kept.length > 0) break;
+    kept.push(row);
+  }
+
+  return { rows: kept, heldForSize: kept.length < capped.length };
+}
+
 function summarize(result: QueryResult, sql: string, schema: SchemaTable[] | null, unvouched: string[] = []) {
-  const sampling = samplingNote(sql, result);
+  const { rows, heldForSize } = rowsInContext(result.rows);
+  const sampling = samplingNote(sql, result, heldForSize);
   const typeMismatch = dateColumnMismatchNote(sql, schema);
   return {
     columns: result.columns.map((column) => column.name),
-    rows: result.rows.slice(0, ROWS_IN_CONTEXT),
+    rows,
     row_count: result.row_count,
-    rows_shown: Math.min(result.rows.length, ROWS_IN_CONTEXT),
-    truncated: result.truncated || result.rows.length > ROWS_IN_CONTEXT,
+    rows_shown: rows.length,
+    truncated: result.truncated || rows.length < result.rows.length,
     duration_ms: result.duration_ms,
     ...(sampling ? { sampling } : {}),
     ...(typeMismatch ? { column_type_warning: typeMismatch } : {}),
