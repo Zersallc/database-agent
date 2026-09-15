@@ -12,19 +12,33 @@ import { llmJudge } from "../judge";
 import { countResult } from "../fixtures";
 import type { EvalCase } from "../types";
 
+/**
+ * One recoverable failure per run, and the `reset` is what makes it per run:
+ * this closure is built once when the module is imported, so without it the
+ * counter is spent by the first repeat and every later one is handed a
+ * database that works first time — then graded for not retrying.
+ */
 function onceFailingThenSucceeds() {
   let calls = 0;
-  return async () => {
-    calls += 1;
-    if (calls === 1) throw new Error("terminated: connection reset by peer");
-    return countResult(7);
+  return {
+    reset: () => {
+      calls = 0;
+    },
+    execute: async () => {
+      calls += 1;
+      if (calls === 1) throw new Error("terminated: connection reset by peer");
+      return countResult(7);
+    },
   };
 }
+
+const shipments = onceFailingThenSucceeds();
 
 export const silentFixNoRenarration: EvalCase = {
   id: "silent-fix-no-renarration",
   description: "a recovered query failure must not be narrated in the final answer",
   question: "How many shipments do we have on file?",
+  reset: shipments.reset,
   connections: [
     {
       name: "Logistics",
@@ -40,7 +54,7 @@ export const silentFixNoRenarration: EvalCase = {
           ],
         },
       ],
-      execute: onceFailingThenSucceeds(),
+      execute: shipments.execute,
     },
   ],
   grade: async (outcome, client) => {
