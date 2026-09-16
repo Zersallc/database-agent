@@ -138,7 +138,8 @@ components/chat/          chat workspace, composer, message bubbles, dispatcher
 components/chat/blocks/   one component per content handler
 components/ui/            shadcn/ui primitives
 components/theme/         color-scheme script and toggle
-lib/workspace-store.ts    client-side conversation + connection state
+lib/chat-store.ts         client-side conversation state, backed by /api/v1
+lib/workspace.ts          connection switcher state
 hooks/                    color-scheme and viewport hooks
 ```
 
