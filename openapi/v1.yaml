@@ -95,6 +95,8 @@ tags:
     description: The system prompt and skills that shape every answer.
   - name: Users
     description: Tenant membership and roles.
+  - name: Keys
+    description: Programmatic API keys for this tenant.
   - name: Files
     description: Attachment upload and retrieval.
 
@@ -1028,6 +1030,102 @@ paths:
         default: { $ref: "#/components/responses/Error" }
 
   # --------------------------------------------------------------------------
+  # Keys
+  # --------------------------------------------------------------------------
+  /v1/keys:
+    get:
+      operationId: listApiKeys
+      tags: [Keys]
+      summary: List this tenant's API keys
+      description: "Required scope: `keys:read`. Never returns a raw key — only `key_hint`."
+      parameters:
+        - $ref: "#/components/parameters/Limit"
+        - $ref: "#/components/parameters/Cursor"
+        - $ref: "#/components/parameters/Order"
+      responses:
+        "200":
+          description: A page of API keys
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/ListEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        type: array
+                        items: { $ref: "#/components/schemas/ApiKey" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        default: { $ref: "#/components/responses/Error" }
+    post:
+      operationId: createApiKey
+      tags: [Keys]
+      summary: Mint a new API key
+      description: |
+        Required scope: `keys:write`. The response's `key` field is the raw
+        key, sent in the clear exactly once — it is not stored, and no later
+        request returns it again. Losing it means revoking the key and
+        minting a new one; there is no recovery endpoint, by design, the same
+        as a model provider's `api_key`.
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/ApiKeyCreate" }
+      responses:
+        "201":
+          description: Created. This is the only response carrying the raw key.
+          headers:
+            Idempotent-Replay: { $ref: "#/components/headers/Idempotent-Replay" }
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiKeyCreated" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        default: { $ref: "#/components/responses/Error" }
+
+  /v1/keys/{key_id}:
+    parameters:
+      - name: key_id
+        in: path
+        required: true
+        schema: { type: string, examples: ["key_01HZX9K2"] }
+    get:
+      operationId: getApiKey
+      tags: [Keys]
+      summary: Retrieve an API key's metadata
+      description: "Required scope: `keys:read`. Never returns a raw key — only `key_hint`."
+      responses:
+        "200":
+          description: The API key
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiKey" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        default: { $ref: "#/components/responses/Error" }
+    delete:
+      operationId: revokeApiKey
+      tags: [Keys]
+      summary: Revoke an API key
+      description: |
+        Required scope: `keys:write`. Takes effect on the very next request
+        made with this key — `lib/api/auth.ts` checks `revoked` on every
+        lookup. The record is kept, revoked, as an audit trail rather than
+        deleted outright.
+      responses:
+        "204":
+          description: Revoked. Revoking an already-revoked key is also a 204.
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        default: { $ref: "#/components/responses/Error" }
+
+  # --------------------------------------------------------------------------
   # Files
   # --------------------------------------------------------------------------
   /v1/files:
@@ -1875,6 +1973,55 @@ components:
         title: { type: string, maxLength: 120 }
         role: { $ref: "#/components/schemas/Role" }
         status: { type: string, enum: [active, pending] }
+
+    # ------------------------------------------------------------------------
+    # Keys
+    # ------------------------------------------------------------------------
+    ApiKey:
+      type: object
+      required: [id, object, role, scopes, key_hint, revoked, created_at]
+      properties:
+        id: { type: string, examples: ["key_01HZX9K2"] }
+        object: { type: string, const: api_key }
+        name: { type: string, nullable: true }
+        role: { $ref: "#/components/schemas/Role" }
+        scopes:
+          type: array
+          items: { type: string }
+          examples: [["connections:read", "runs:write"]]
+        key_hint:
+          type: string
+          description: Last four characters of the raw key, masked. Never enough to use.
+          examples: ["••••aB3d"]
+        revoked: { type: boolean }
+        created_at: { type: string, format: date-time }
+        last_used_at: { type: string, format: date-time, nullable: true }
+
+    ApiKeyCreate:
+      type: object
+      properties:
+        name: { type: string, maxLength: 120 }
+        role:
+          allOf: [{ $ref: "#/components/schemas/Role" }]
+          default: member
+        scopes:
+          type: array
+          items: { type: string }
+          description: |
+            Defaults to every scope the role carries. Must not exceed it — a
+            `member`-role key cannot be granted a scope only `admin` holds.
+
+    ApiKeyCreated:
+      description: An `ApiKey` plus the raw key, present only in this response.
+      allOf:
+        - $ref: "#/components/schemas/ApiKey"
+        - type: object
+          required: [key]
+          properties:
+            key:
+              type: string
+              description: The raw key. Store it now — it is never shown again.
+              examples: ["sk_live_9f2c…"]
 
     # ------------------------------------------------------------------------
     # Files

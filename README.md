@@ -145,10 +145,6 @@ hooks/                    color-scheme and viewport hooks
 
 ## Not built yet
 
-- **API key issuance.** Workspace keys are looked up and enforced, but there is
-  no endpoint that mints one yet; development uses open access to the local
-  workspace. (This is about keys *for* this API — the keys for Claude, Qwen and
-  friends are configurable under Settings → Model provider.)
 - **Snowflake and Azure Blob Storage.** Both are one interface implementation
   away. Neither is listed in the contract until its driver works.
 - Table grouping, and real CSV/Excel/PDF parsing in the file handler.

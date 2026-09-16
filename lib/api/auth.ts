@@ -33,6 +33,8 @@ export const SCOPES = [
   "files:write",
   "report_settings:read",
   "report_settings:write",
+  "keys:read",
+  "keys:write",
 ] as const;
 
 export type Scope = (typeof SCOPES)[number];
@@ -80,9 +82,21 @@ export type Principal = {
   apiKeyId: string | null;
 };
 
-/** Stored key record. Lives under the system partition, keyed by hash. */
+/**
+ * Stored key record. Lives under the system partition, keyed by hash — `id`
+ * IS the SHA-256 hash of the raw key, because that is the only lookup this
+ * partition exists to make fast: a bearer token arrives with no tenant
+ * attached, so the hash has to find the record before the tenant is known.
+ *
+ * `key_id` is the human-facing identifier (`key_…`, see `lib/api/ids.ts`)
+ * returned to callers for listing and revocation. It is never used as a
+ * lookup key on the hot path, because a client presenting `key_id` instead
+ * of the real key would otherwise be a bypass of the hash check.
+ */
 export type ApiKeyRecord = {
   id: string;
+  key_id: string;
+  key_hint: string;
   tenant_id: string;
   user_id: string;
   role: Role;
@@ -164,7 +178,7 @@ export async function authenticate(request: Request): Promise<Principal> {
     userId: record.user_id,
     role: record.role,
     scopes: record.scopes ?? ROLE_SCOPES[record.role],
-    apiKeyId: record.id,
+    apiKeyId: record.key_id,
   };
 }
 
