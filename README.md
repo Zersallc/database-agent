@@ -20,8 +20,10 @@ OpenRouter, Together and Ollama are all supported — two adapters, one for
 Claude's Messages API and one for the OpenAI Chat Completions format that the
 rest implement — so you can add several and switch between them to compare.
 
-The chat UI still calls the older `/api/chat`, which now runs the real agent and
-is deprecated with a runway to 2027-05-08 — see
+The chat UI itself has run on `/api/v1` since 2026-08-12 — server-side
+conversations, streamed runs, and a query-ID trace on the SQL block. The older
+`/api/chat` route still exists and still runs the real agent; it is deprecated
+with a runway to 2027-05-08 for any other caller still on it — see
 [`docs/api/versioning.md`](docs/api/versioning.md).
 
 ## Requirements
@@ -142,9 +144,6 @@ hooks/                    color-scheme and viewport hooks
 
 ## Not built yet
 
-- **The chat UI still talks to `/api/chat`** and keeps conversations in
-  `localStorage`. Moving it onto `/api/v1` — server-side conversations, streamed
-  runs, the trace with query IDs — is the next piece of work.
 - **API key issuance.** Workspace keys are looked up and enforced, but there is
   no endpoint that mints one yet; development uses open access to the local
   workspace. (This is about keys *for* this API — the keys for Claude, Qwen and
