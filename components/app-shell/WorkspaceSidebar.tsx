@@ -7,6 +7,7 @@ import {
   BookOpenIcon,
   Building2Icon,
   DatabaseIcon,
+  FlagIcon,
   LogOutIcon,
   MessageSquareIcon,
   PlusIcon,
@@ -35,12 +36,13 @@ import { Button } from "@/components/ui/button";
 import { ThemeToggle } from "@/components/theme/ThemeToggle";
 import { useWorkspace } from "@/lib/chat-store";
 import { useProfile } from "@/lib/profile";
-import { isAdminRole } from "@/lib/roles";
+import { isAdminRole, isDeveloperRole } from "@/lib/roles";
 import { CompanySwitcher } from "./CompanySwitcher";
 
 const NAV = [
   { href: "/", label: "Chat", icon: SparklesIcon },
   { href: "/playbook", label: "Playbook", icon: BookOpenIcon },
+  { href: "/ai-feedback", label: "AI Feedback", icon: FlagIcon, developerOnly: true },
   { href: "/users", label: "Users", icon: UsersIcon, adminOnly: true },
   { href: "/companies", label: "Companies", icon: Building2Icon, adminOnly: true },
   { href: "/database-mapping", label: "Database Mapping", icon: DatabaseIcon, adminOnly: true },
@@ -60,9 +62,9 @@ export function WorkspaceSidebar() {
   } = useWorkspace();
 
   const isAdmin = isAdminRole(session?.user?.role);
-  const isDeveloper = session?.user?.role === "Developer";
+  const isDeveloper = isDeveloperRole(session?.user?.role);
   const onChat = pathname === "/";
-  const nav = NAV.filter((item) => !item.adminOnly || isAdmin);
+  const nav = NAV.filter((item) => (!item.adminOnly || isAdmin) && (!item.developerOnly || isDeveloper));
 
   const displayName = profile?.name || session?.user?.email || "";
   const subtitle = [profile?.company_name, isAdmin ? "Admin" : "Member"]

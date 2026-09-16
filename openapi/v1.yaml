@@ -99,6 +99,8 @@ tags:
     description: Programmatic API keys for this tenant.
   - name: Files
     description: Attachment upload and retrieval.
+  - name: AI Feedback
+    description: User-submitted reports about an AI response, triaged by Developers across every company.
 
 paths:
   # --------------------------------------------------------------------------
@@ -1183,6 +1185,189 @@ paths:
         "404": { $ref: "#/components/responses/NotFound" }
         default: { $ref: "#/components/responses/Error" }
 
+  # --------------------------------------------------------------------------
+  # AI Feedback
+  # --------------------------------------------------------------------------
+  /v1/ai-feedback:
+    get:
+      operationId: listAiFeedback
+      tags: [AI Feedback]
+      summary: List AI Feedback reports across every company
+      description: |
+        Required scope: `ai_feedback:read`, and the caller must be signed in
+        as a Developer — this is the one cross-tenant read in the API, so an
+        API key can never satisfy it (a `403` regardless of the key's role).
+        `q` is a bounded, in-memory substring search over description,
+        context, company name, and reporter email; every other filter is an
+        exact match pushed down to the store.
+      parameters:
+        - $ref: "#/components/parameters/Limit"
+        - $ref: "#/components/parameters/Cursor"
+        - $ref: "#/components/parameters/Order"
+        - name: status
+          in: query
+          schema: { type: string, enum: [open, in_progress, resolved, wont_fix, duplicate] }
+        - name: priority
+          in: query
+          schema: { type: string, enum: [low, medium, high, urgent] }
+        - name: category
+          in: query
+          schema:
+            type: string
+            enum: [incorrect_data, wrong_sql, slow_performance, error_or_crash, unclear_response, other]
+        - name: tenant_id
+          in: query
+          description: Filter to one reporting company.
+          schema: { type: string }
+        - name: assigned_to_user_id
+          in: query
+          schema: { type: string }
+        - name: q
+          in: query
+          description: Bounded substring search over description, context, company name, and reporter email.
+          schema: { type: string }
+      responses:
+        "200":
+          description: A page of AI Feedback reports
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/ListEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        type: array
+                        items: { $ref: "#/components/schemas/AiFeedbackSummary" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        default: { $ref: "#/components/responses/Error" }
+    post:
+      operationId: createAiFeedback
+      tags: [AI Feedback]
+      summary: Report an AI response
+      description: |
+        Required scope: `ai_feedback:write`. Available to any workspace
+        principal, for a run in their own tenant — everything beyond
+        `run_id`/`description`/`category`/`additional_context` is re-derived
+        server-side from the run itself, never trusted from this request body.
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/AiFeedbackCreate" }
+      responses:
+        "201":
+          description: Submitted
+          headers:
+            Idempotent-Replay: { $ref: "#/components/headers/Idempotent-Replay" }
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [id, status, created_at]
+                properties:
+                  id: { type: string, examples: ["fbk_01HZX9K2"] }
+                  status: { type: string, const: open }
+                  created_at: { type: string, format: date-time }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404":
+          description: No such `run_id` in the caller's tenant.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "409": { $ref: "#/components/responses/Conflict" }
+        default: { $ref: "#/components/responses/Error" }
+
+  /v1/ai-feedback/assignees:
+    get:
+      operationId: listAiFeedbackAssignees
+      tags: [AI Feedback]
+      summary: List Developer accounts eligible for assignment
+      description: "Required scope: `ai_feedback:read`, Developer session only. Backs the assignee picker in the triage UI."
+      responses:
+        "200":
+          description: Every Developer account
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data]
+                properties:
+                  data:
+                    type: array
+                    items:
+                      type: object
+                      required: [user_id, email]
+                      properties:
+                        user_id: { type: string }
+                        email: { type: string }
+                        name: { type: [string, "null"] }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        default: { $ref: "#/components/responses/Error" }
+
+  /v1/ai-feedback/{feedback_id}:
+    parameters:
+      - name: feedback_id
+        in: path
+        required: true
+        schema: { type: string, examples: ["fbk_01HZX9K2"] }
+    get:
+      operationId: getAiFeedback
+      tags: [AI Feedback]
+      summary: Retrieve one AI Feedback report, with live query results
+      description: |
+        Required scope: `ai_feedback:read`, Developer session only. The
+        snapshot's `queries[]` carries SQL and result metadata only — actual
+        row data is fetched live and tenant-scoped at request time and
+        returned separately as `queries_with_rows`, never stored in the
+        cross-tenant partition.
+      responses:
+        "200":
+          description: The report
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/AiFeedbackDetail" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        default: { $ref: "#/components/responses/Error" }
+    patch:
+      operationId: updateAiFeedback
+      tags: [AI Feedback]
+      summary: Triage an AI Feedback report
+      description: |
+        Required scope: `ai_feedback:write`, Developer session only. Every
+        changed field appends one entry to `history[]`. Setting `status` to
+        `resolved` requires `resolution_summary` in the same request;
+        `unassign: true` clears `assigned_to` and cannot be combined with
+        `assigned_to_user_id`.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/AiFeedbackUpdate" }
+      responses:
+        "200":
+          description: The updated report
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/AiFeedbackDetail" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "422":
+          description: "`status: resolved` was sent without a `resolution_summary`."
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        default: { $ref: "#/components/responses/Error" }
+
 components:
   securitySchemes:
     bearerAuth:
@@ -2022,6 +2207,226 @@ components:
               type: string
               description: The raw key. Store it now — it is never shown again.
               examples: ["sk_live_9f2c…"]
+
+    # ------------------------------------------------------------------------
+    # AI Feedback
+    # ------------------------------------------------------------------------
+    AiFeedbackActor:
+      type: object
+      required: [user_id, email]
+      properties:
+        user_id: { type: string }
+        email: { type: [string, "null"] }
+
+    AiFeedbackCreate:
+      type: object
+      required: [run_id, description]
+      properties:
+        run_id: { type: string, examples: ["run_01HZX9K2"] }
+        description: { type: string, minLength: 1, maxLength: 4000 }
+        category:
+          type: string
+          enum: [incorrect_data, wrong_sql, slow_performance, error_or_crash, unclear_response, other]
+        additional_context: { type: string, maxLength: 4000 }
+
+    AiFeedbackSummary:
+      type: object
+      required:
+        [id, object, status, priority, category, description, tenant_id, tenant_name, reported_by, assigned_to, created_at, updated_at]
+      properties:
+        id: { type: string, examples: ["fbk_01HZX9K2"] }
+        object: { type: string, const: ai_feedback }
+        status: { type: string, enum: [open, in_progress, resolved, wont_fix, duplicate] }
+        priority: { type: [string, "null"], enum: [low, medium, high, urgent, null] }
+        category:
+          type: [string, "null"]
+          enum: [incorrect_data, wrong_sql, slow_performance, error_or_crash, unclear_response, other, null]
+        description: { type: string }
+        tenant_id: { type: string }
+        tenant_name: { type: [string, "null"] }
+        reported_by: { $ref: "#/components/schemas/AiFeedbackActor" }
+        assigned_to:
+          allOf: [{ $ref: "#/components/schemas/AiFeedbackActor" }]
+          nullable: true
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+
+    AiFeedbackSnapshot:
+      type: object
+      description: Immutable debugging context captured once when the report was submitted.
+      properties:
+        request_content: { type: [string, "null"] }
+        response_content: { type: [string, "null"] }
+        response_thinking: { type: [string, "null"] }
+        model: { type: [string, "null"] }
+        usage:
+          type: [object, "null"]
+          properties:
+            input_tokens: { type: integer }
+            output_tokens: { type: integer }
+        duration_ms: { type: [integer, "null"] }
+        run_status: { type: string, enum: [queued, running, succeeded, failed] }
+        run_error:
+          type: [object, "null"]
+          properties:
+            code: { type: string }
+            message: { type: string }
+        steps:
+          type: array
+          items: { type: object }
+        queries:
+          type: array
+          description: SQL and result metadata only — never row data. See `queries_with_rows` on the detail response.
+          items:
+            type: object
+            properties:
+              query_id: { type: string }
+              sql: { type: string }
+              status: { type: string, enum: [succeeded, failed] }
+              row_count: { type: integer }
+              truncated: { type: boolean }
+              duration_ms: { type: integer }
+              error:
+                type: [object, "null"]
+                properties:
+                  code: { type: string }
+                  message: { type: string }
+        attachments:
+          type: array
+          items:
+            type: object
+            properties:
+              file_id: { type: string }
+              name: { type: string }
+              mime_type: { type: string }
+              size_bytes: { type: [integer, "null"] }
+
+    AiFeedbackHistoryEntry:
+      type: object
+      required: [id, at, actor, type]
+      properties:
+        id: { type: string }
+        at: { type: string, format: date-time }
+        actor: { $ref: "#/components/schemas/AiFeedbackActor" }
+        type:
+          type: string
+          enum:
+            [
+              created,
+              status_changed,
+              priority_changed,
+              category_changed,
+              assigned,
+              unassigned,
+              note_added,
+              resolved,
+              reopened,
+              issue_linked,
+              duplicate_linked,
+              related_linked,
+            ]
+        changes: { type: object }
+        note: { type: string }
+
+    AiFeedbackDetail:
+      description: The full report, including the debugging snapshot, triage state, history, and live query results.
+      allOf:
+        - $ref: "#/components/schemas/AiFeedbackSummary"
+        - type: object
+          required: [conversation_id, run_id, snapshot, snapshot_taken_at, history, queries_with_rows]
+          properties:
+            additional_context: { type: [string, "null"] }
+            conversation_id: { type: string }
+            run_id: { type: string }
+            response_message_id: { type: [string, "null"] }
+            request_message_id: { type: [string, "null"] }
+            snapshot: { $ref: "#/components/schemas/AiFeedbackSnapshot" }
+            snapshot_taken_at: { type: string, format: date-time }
+            assigned_to_user_id: { type: [string, "null"] }
+            resolution:
+              type: [object, "null"]
+              properties:
+                summary: { type: string }
+                resolved_at: { type: string, format: date-time }
+                resolved_by: { $ref: "#/components/schemas/AiFeedbackActor" }
+            linked_issue_url:
+              type: [string, "null"]
+              description: An external issue-tracker URL a Developer has linked to this report.
+            duplicate_of:
+              type: [string, "null"]
+              description: The `id` of another AiFeedback report this one duplicates, if marked as a duplicate.
+            related_report_ids:
+              type: array
+              items: { type: string }
+              description: Ids of other AiFeedback reports a Developer has linked as related.
+            history:
+              type: array
+              items: { $ref: "#/components/schemas/AiFeedbackHistoryEntry" }
+            queries_with_rows:
+              type: array
+              description: |
+                Live, tenant-scoped result rows for each snapshotted query —
+                fetched at request time, never stored in the cross-tenant
+                partition.
+              items:
+                type: object
+                properties:
+                  query_id: { type: string }
+                  columns:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        name: { type: string }
+                        data_type: { type: [string, "null"] }
+                  rows:
+                    type: array
+                    items: { type: array, items: {} }
+
+    AiFeedbackUpdate:
+      type: object
+      properties:
+        status: { type: string, enum: [open, in_progress, resolved, wont_fix, duplicate] }
+        priority: { type: string, enum: [low, medium, high, urgent] }
+        category:
+          type: string
+          enum: [incorrect_data, wrong_sql, slow_performance, error_or_crash, unclear_response, other]
+        assigned_to_user_id: { type: string }
+        unassign:
+          type: boolean
+          description: Clears `assigned_to`. Cannot be combined with `assigned_to_user_id`.
+        resolution_summary:
+          type: string
+          maxLength: 2000
+          description: Required in the same request that sets `status` to `resolved`.
+        note:
+          type: string
+          minLength: 1
+          maxLength: 4000
+          description: Appends a `note_added` history entry. Does not change any other field.
+        linked_issue_url:
+          type: string
+          format: uri
+          maxLength: 2000
+          description: Sets the external issue-tracker link. Cannot be combined with `unlink_issue`.
+        unlink_issue:
+          type: boolean
+          description: Clears `linked_issue_url`. Cannot be combined with `linked_issue_url`.
+        duplicate_of:
+          type: string
+          description: |
+            Marks this report as a duplicate of another AiFeedback report id.
+            Must reference an existing report and cannot be the report's own
+            id. Cannot be combined with `unmark_duplicate`.
+        unmark_duplicate:
+          type: boolean
+          description: Clears `duplicate_of`. Cannot be combined with `duplicate_of`.
+        add_related_report_id:
+          type: string
+          description: Adds another AiFeedback report id to `related_report_ids`. Must reference an existing report.
+        remove_related_report_id:
+          type: string
+          description: Removes a report id from `related_report_ids`. A no-op if it isn't present.
 
     # ------------------------------------------------------------------------
     # Files

@@ -34,6 +34,7 @@ export const COLLECTIONS = [
   "reports",
   "report_settings",
   "registered_tables",
+  "ai_feedback",
 ] as const;
 
 export type Collection = (typeof COLLECTIONS)[number];

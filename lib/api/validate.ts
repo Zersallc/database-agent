@@ -48,8 +48,17 @@ export function withDefault<T>(inner: Validator<T>, fallback: T): Validator<T> {
 // valid-but-unusual address. Real verification is a confirmation email's job.
 const EMAIL = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
+function isHttpUrl(value: string): boolean {
+  try {
+    const url = new URL(value);
+    return url.protocol === "http:" || url.protocol === "https:";
+  } catch {
+    return false;
+  }
+}
+
 export function string(
-  opts: { min?: number; max?: number; trim?: boolean; format?: "email" } = {}
+  opts: { min?: number; max?: number; trim?: boolean; format?: "email" | "url" } = {}
 ): Validator<string> {
   const { min = 0, max = Infinity, trim = true, format } = opts;
   return make((value, path, issues) => {
@@ -71,6 +80,10 @@ export function string(
     }
     if (format === "email" && !EMAIL.test(out)) {
       issues.push({ path, issue: "must be a valid email address" });
+      return INVALID;
+    }
+    if (format === "url" && !isHttpUrl(out)) {
+      issues.push({ path, issue: "must be a valid http(s) URL" });
       return INVALID;
     }
     return out;

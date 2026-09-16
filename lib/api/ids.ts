@@ -26,6 +26,7 @@ export const ID_PREFIX = {
   file: "file",
   reportFile: "rpt",
   request: "req",
+  feedback: "fbk",
 } as const;
 
 export type IdKind = keyof typeof ID_PREFIX;

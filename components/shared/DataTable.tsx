@@ -46,6 +46,7 @@ export function DataTable<T>({
   exportFileName,
   onDeleteSelected,
   emptyMessage = "No results found.",
+  onRowClick,
 }: {
   data: T[];
   columns: ExportableColumnDef<T>[];
@@ -54,6 +55,8 @@ export function DataTable<T>({
   exportFileName?: string;
   onDeleteSelected?: (rows: T[]) => void;
   emptyMessage?: string;
+  /** Navigates to a detail view. Rows render as clickable when set. */
+  onRowClick?: (row: T) => void;
 }) {
   const [sorting, setSorting] = useState<SortingState>([]);
   const [columnVisibility, setColumnVisibility] = useState<VisibilityState>({});
@@ -230,7 +233,12 @@ export function DataTable<T>({
               </TableRow>
             ) : (
               table.getRowModel().rows.map((row) => (
-                <TableRow key={row.id} data-state={row.getIsSelected() ? "selected" : undefined}>
+                <TableRow
+                  key={row.id}
+                  data-state={row.getIsSelected() ? "selected" : undefined}
+                  onClick={onRowClick ? () => onRowClick(row.original) : undefined}
+                  className={onRowClick ? "cursor-pointer hover:bg-muted/50" : undefined}
+                >
                   {row.getVisibleCells().map((cell) => (
                     <TableCell key={cell.id}>{flexRender(cell.column.columnDef.cell, cell.getContext())}</TableCell>
                   ))}

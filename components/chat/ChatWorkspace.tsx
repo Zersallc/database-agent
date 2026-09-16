@@ -157,6 +157,9 @@ export function ChatWorkspace() {
           updateLocalMessage(conversationId, assistantMessageId, {
             content: `**Something went wrong.**\n\n${payload.error?.message ?? payload.run?.error?.message ?? "The agent could not answer."}`,
             streaming: false,
+            // Failed runs still get a durable RunDoc — carrying the id through
+            // lets a failed answer be reported, same as a successful one.
+            runId: payload.run?.id ?? null,
           });
         }
       }

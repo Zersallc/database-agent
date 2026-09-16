@@ -18,6 +18,11 @@ export function isAdminRole(role: string | null | undefined): boolean {
   return role != null && ADMIN_ROLES.has(role);
 }
 
+/** Strictly Developer — excludes Admin, unlike isAdminRole(). For cross-tenant resources. */
+export function isDeveloperRole(role: string | null | undefined): boolean {
+  return role === "Developer";
+}
+
 export function isValidRole(role: unknown): role is AppRole {
   return typeof role === "string" && (ROLES as readonly string[]).includes(role);
 }

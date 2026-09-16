@@ -88,6 +88,19 @@ describe("string", () => {
       assert.equal(fieldsOf(err)[0].issue, "must be a valid email address", `${bad} should fail`);
     }
   });
+
+  test("url format accepts http and https URLs", () => {
+    for (const good of ["https://github.com/acme/repo/issues/9", "http://tracker.internal/issues/1"]) {
+      assert.equal(validate(good, string({ format: "url" })), good);
+    }
+  });
+
+  test("url format rejects non-URLs and non-http(s) schemes", () => {
+    for (const bad of ["nope", "ftp://files.example/x", "javascript:alert(1)", "//no-scheme.example"]) {
+      const err = failure(() => validate(bad, string({ format: "url" })));
+      assert.equal(fieldsOf(err)[0].issue, "must be a valid http(s) URL", `${bad} should fail`);
+    }
+  });
 });
 
 describe("oneOf", () => {

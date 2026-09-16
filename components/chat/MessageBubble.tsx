@@ -5,6 +5,7 @@ import { motion } from "framer-motion";
 import { SparklesIcon } from "lucide-react";
 import { Dialog, DialogContent, DialogTitle } from "@/components/ui/dialog";
 import { Markdown } from "./Markdown";
+import { ReportResponseButton } from "./ReportResponseDialog";
 import { ExecutedQueryBlock } from "./blocks/ExecutedQueryBlock";
 import { ThinkingBlock } from "./blocks/ThinkingBlock";
 import { queriesForRun, resultSignature, type ExecutedQuery } from "./blocks/sql/executed";
@@ -58,11 +59,22 @@ function UsageLine({ message }: { message: StoreMessage }) {
   const seconds = message.durationMs ? (message.durationMs / 1000).toFixed(1) : null;
 
   return (
-    <p className="mt-1.5 text-xs text-muted-foreground">
+    <span>
       {total.toLocaleString()} tokens ({input_tokens.toLocaleString()} in ·{" "}
       {output_tokens.toLocaleString()} out)
       {seconds && ` · ${seconds}s`}
-    </p>
+    </span>
+  );
+}
+
+/** Usage line and Report button share a row — both are only meaningful once the run is done. */
+function MessageFooter({ message }: { message: StoreMessage }) {
+  if (message.streaming || !message.runId) return null;
+  return (
+    <div className="mt-1.5 flex items-center gap-1.5 text-xs text-muted-foreground">
+      <UsageLine message={message} />
+      <ReportResponseButton runId={message.runId} preview={message.content} />
+    </div>
   );
 }
 
@@ -135,7 +147,7 @@ export function MessageBubble({
               new Set(queries.map((q) => resultSignature(q.columns, q.rows)))
             }
           />
-          <UsageLine message={message} />
+          <MessageFooter message={message} />
         </div>
       )}
     </motion.div>

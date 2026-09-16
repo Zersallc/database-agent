@@ -35,6 +35,8 @@ export const SCOPES = [
   "report_settings:write",
   "keys:read",
   "keys:write",
+  "ai_feedback:read",
+  "ai_feedback:write",
 ] as const;
 
 export type Scope = (typeof SCOPES)[number];
@@ -51,6 +53,7 @@ const READ_SCOPES: Scope[] = [
   "users:read",
   "files:read",
   "report_settings:read",
+  "ai_feedback:read",
 ];
 
 /**
@@ -70,6 +73,7 @@ export const ROLE_SCOPES: Record<Role, Scope[]> = {
     "runs:write",
     "playbook:write",
     "files:write",
+    "ai_feedback:write",
   ],
   viewer: READ_SCOPES,
 };
