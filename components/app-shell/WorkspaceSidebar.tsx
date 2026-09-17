@@ -67,7 +67,7 @@ export function WorkspaceSidebar() {
   const nav = NAV.filter((item) => (!item.adminOnly || isAdmin) && (!item.developerOnly || isDeveloper));
 
   const displayName = profile?.name || session?.user?.email || "";
-  const subtitle = [profile?.company_name, session?.user?.role]
+  const subtitle = [profile?.company_name, isAdmin ? "Admin" : "Member"]
     .filter(Boolean)
     .join(" — ");
 

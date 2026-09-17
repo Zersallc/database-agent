@@ -19,28 +19,7 @@ import {
   SidebarMenuItem,
 } from "@/components/ui/sidebar";
 
-type Company = { id: string; name: string; logoDataUrl: string | null };
-
-function CompanyMark({ company, className }: { company: Company | undefined; className?: string }) {
-  if (company?.logoDataUrl) {
-    return (
-      // eslint-disable-next-line @next/next/no-img-element -- a small per-company logo, not a page asset
-      <img
-        src={company.logoDataUrl}
-        alt={`${company.name} logo`}
-        className={`${className ?? ""} rounded-lg object-contain`}
-      />
-    );
-  }
-  return (
-    <div
-      className={`${className ?? ""} flex items-center justify-center rounded-lg bg-sidebar-primary text-sidebar-primary-foreground`}
-      aria-label={company ? `${company.name} (no logo)` : "No company"}
-    >
-      <Building2Icon className="size-4" />
-    </div>
-  );
-}
+type Company = { id: string; name: string };
 
 /**
  * Developer-only. Everyone else belongs to exactly one company and sees no
@@ -98,7 +77,9 @@ export function CompanySwitcher({ currentCompanyId }: { currentCompanyId: string
                 disabled={switching}
                 className="data-open:bg-sidebar-accent data-open:text-sidebar-accent-foreground"
               >
-                <CompanyMark company={current} className="aspect-square size-8 shrink-0" />
+                <div className="flex aspect-square size-8 items-center justify-center rounded-lg bg-sidebar-primary text-sidebar-primary-foreground">
+                  <Building2Icon className="size-4" />
+                </div>
                 <div className="grid flex-1 text-left leading-tight">
                   <span className="truncate font-medium">
                     {switching ? "Switching…" : (current?.name ?? "No company")}
@@ -114,8 +95,7 @@ export function CompanySwitcher({ currentCompanyId }: { currentCompanyId: string
               <DropdownMenuLabel>Switch company</DropdownMenuLabel>
               <DropdownMenuSeparator />
               {companies.map((company) => (
-                <DropdownMenuItem key={company.id} onClick={() => void switchTo(company.id)} className="gap-2">
-                  <CompanyMark company={company} className="size-5 shrink-0" />
+                <DropdownMenuItem key={company.id} onClick={() => void switchTo(company.id)}>
                   <span className="flex-1 truncate">{company.name}</span>
                   {company.id === currentCompanyId && <CheckIcon className="size-3.5" />}
                 </DropdownMenuItem>
