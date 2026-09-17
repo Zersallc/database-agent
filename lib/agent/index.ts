@@ -635,23 +635,29 @@ export async function* runAgent(input: AgentRunInput): AsyncGenerator<AgentEvent
   let lastQueryNothingRepeats = false;
   let noWinnerCorrected = false;
   /**
-   * Every value this database has shown the model: the schema's value lists,
+   * Every value each database has shown the model: the schema's value lists,
    * plus the cells of every result read so far. This is what a filter literal
    * has to be backed by before an empty result may be called an absence.
+   *
+   * Keyed by connection id rather than one shared set: a value real on one
+   * connection must not excuse an absence claim about a different one in the
+   * same multi-connection run.
    *
    * Seeded from the schema rather than left empty, so the common case costs
    * nothing — with value hints in the prompt the model usually filters on a
    * spelling that is already in here, and the check stays silent.
    */
-  const vouched = new Set<string>();
+  const vouchedByConnection = new Map<string, Set<string>>();
   for (const connection of input.connections) {
+    const values = new Set<string>();
     for (const table of connection.schema ?? []) {
       for (const column of table.columns) {
         for (const value of column.distinct_values?.list ?? []) {
-          vouched.add(value.trim().toLowerCase());
+          values.add(value.trim().toLowerCase());
         }
       }
     }
+    vouchedByConnection.set(connection.id, values);
   }
   /**
    * Literals from the most recent query that came back empty, when nothing
@@ -1157,6 +1163,9 @@ export async function* runAgent(input: AgentRunInput): AsyncGenerator<AgentEvent
 
         try {
           const { queryId, result } = await target.execute(sql);
+          // Non-null: seeded above for every connection in input.connections,
+          // and target is always drawn from that same list.
+          const vouched = vouchedByConnection.get(target.id)!;
           lastQueryRowCount = result.row_count;
           lastQueryFoundNothing = foundNothing(result.rows, result.row_count);
           // Only a result that found nothing raises the question at all, and it
