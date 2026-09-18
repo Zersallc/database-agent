@@ -17,6 +17,14 @@ import { ConnectorError } from "./types";
 
 /* eslint-disable @typescript-eslint/no-explicit-any -- the driver is loaded at runtime */
 
+/**
+ * An unreachable host otherwise hangs rather than failing — see the matching
+ * constant in postgres.ts for why this matters for Database Mapping
+ * specifically (one dead connection can otherwise stall every company's row
+ * on the same page load, past Cloudflare's own edge timeout).
+ */
+const CONNECT_TIMEOUT_MS = 10_000;
+
 /** mysql2 reports column types as protocol constants; name the common ones. */
 const TYPE_NAMES: Record<number, string> = {
   0: "decimal",
@@ -75,13 +83,14 @@ export class MySqlConnector implements DataSourceConnector {
     try {
       this.connection = await createConnection(
         credentials.dsn
-          ? { uri: credentials.dsn }
+          ? { uri: credentials.dsn, connectTimeout: CONNECT_TIMEOUT_MS }
           : {
               host: credentials.host,
               port: credentials.port ?? 3306,
               user: credentials.username,
               password: credentials.password,
               database: credentials.database,
+              connectTimeout: CONNECT_TIMEOUT_MS,
               ...(credentials.ssl === false ? {} : { ssl: { rejectUnauthorized: false } }),
             }
       );

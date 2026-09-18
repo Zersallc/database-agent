@@ -20,6 +20,18 @@ import { ConnectorError } from "./types";
 /* eslint-disable @typescript-eslint/no-explicit-any -- the driver is loaded at runtime */
 
 /**
+ * `pg` has no connection timeout by default — an unreachable host (a dead
+ * Cloud SQL instance, a revoked authorized-network entry) hangs forever
+ * instead of failing. Database Mapping fetches every company's connections
+ * in parallel on one page load, so one hung connection stalls the whole
+ * response until Cloudflare's own edge timeout kills it with a 524 — taking
+ * down every other company's rows along with it. Bounded well under that
+ * edge timeout so a dead database fails fast and stays caught by this
+ * connector's own try/catch instead.
+ */
+const CONNECT_TIMEOUT_MS = 10_000;
+
+/**
  * The OIDs worth naming. `pg` reports column types as numeric OIDs, and a bare
  * number in an API response is useless to a caller; anything unmapped comes
  * back as null rather than a lie.
@@ -258,7 +270,11 @@ export class PostgresConnector implements DataSourceConnector {
 
     this.client = new Client(
       credentials.dsn
-        ? { connectionString: credentials.dsn, ssl: credentials.ssl === false ? false : { rejectUnauthorized: false } }
+        ? {
+            connectionString: credentials.dsn,
+            ssl: credentials.ssl === false ? false : { rejectUnauthorized: false },
+            connectionTimeoutMillis: CONNECT_TIMEOUT_MS,
+          }
         : {
             host: credentials.host,
             port: credentials.port ?? 5432,
@@ -266,6 +282,7 @@ export class PostgresConnector implements DataSourceConnector {
             password: credentials.password,
             database: credentials.database,
             ssl: credentials.ssl === false ? false : { rejectUnauthorized: false },
+            connectionTimeoutMillis: CONNECT_TIMEOUT_MS,
           }
     );
 
