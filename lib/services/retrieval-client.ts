@@ -47,7 +47,7 @@ export type RetrievalResult = {
 };
 
 export type RetrievalClientConfig = {
-  /** syslab-server's retrieval plane, e.g. http://192.168.1.185:8080/api/v1 — no trailing slash required. */
+  /** syslab-server's retrieval plane, e.g. http://<host>:8080/api/v1 — no trailing slash required. */
   baseUrl: string;
   /** One value from that syslab-server's RETRIEVAL_TOKENS. */
   token: string;
