@@ -210,6 +210,33 @@ export async function* executeRun(
     // Fixed to this app's own Postgres schema (Report/Inventory/item_sustainability),
     // not the dynamically-configured `connection` above — a conversation's chosen
     // data source has no bearing on whether the ESG report pipeline is available.
+    // Null when this deployment has no syslab-server retrieval endpoint
+    // configured, the same "absent means the tool is not offered" shape
+    // reportGenerator below uses — a workspace with no documents ingested
+    // there should not fail differently from one that never configured it.
+    const documentSearch: NonNullable<Parameters<typeof runAgent>[0]["documentSearch"]> | null =
+      process.env.RETRIEVAL_BASE_URL && process.env.RETRIEVAL_TOKEN
+        ? {
+            search: async (query: string) => {
+              const { RetrievalClient } = await import("./retrieval-client");
+              const client = new RetrievalClient({
+                baseUrl: process.env.RETRIEVAL_BASE_URL!,
+                token: process.env.RETRIEVAL_TOKEN!,
+              });
+              const result = await client.retrieve(query, tenantId);
+              return {
+                passages: result.passages.map((p) => ({
+                  source: p.source,
+                  text: p.text,
+                  found_by: p.found_by,
+                })),
+                coverage: result.coverage,
+                what_this_means: result.what_this_means,
+              };
+            },
+          }
+        : null;
+
     const reportGenerator: NonNullable<Parameters<typeof runAgent>[0]["reportGenerator"]> = {
       generate: async ({ hospitalName, hospitalGroup, year, month }) => {
         const { aggregateEsgReport } = await import("./esg-report");
@@ -286,6 +313,7 @@ export async function* executeRun(
       connections: agentConnections,
       client: resolved?.client ?? null,
       reportGenerator,
+      documentSearch,
     })) {
       if (event.type === "step") {
         steps.push(event.step);

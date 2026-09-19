@@ -416,6 +416,20 @@ export type AgentConnection = {
   execute: (sql: string) => Promise<{ queryId: string; result: QueryResult }>;
 };
 
+/**
+ * Lets the agent search this workspace's documents via syslab-server's
+ * retrieval plane. Null means no retrieval endpoint is configured for this
+ * deployment — the agent still works with run_sql/generate_esg_report alone,
+ * the same way a workspace with no report data omits `reportGenerator`.
+ */
+export type DocumentSearch = {
+  search: (query: string) => Promise<{
+    passages: { source: string; text: string; found_by: string[] }[];
+    coverage: { searched: number; matched: number; returned: number };
+    what_this_means: string;
+  }>;
+};
+
 /** Lets the agent produce a downloadable Monthly/Annual ESG/GHG report on request. */
 export type ReportGenerator = {
   generate: (params: {
@@ -456,6 +470,14 @@ export type AgentRunInput = {
   enableThinking?: boolean;
   /** Null when report generation isn't wired for this run (no hospital data connected). */
   reportGenerator: ReportGenerator | null;
+  /**
+   * Optional, unlike reportGenerator: absent (or null) means no syslab-server
+   * retrieval endpoint is configured for this deployment. Optional rather
+   * than required so every existing caller that predates this field — the
+   * whole existing test suite — keeps compiling without having to know it
+   * exists.
+   */
+  documentSearch?: DocumentSearch | null;
   /**
    * Wall-clock date the model should ground relative and year-omitted dates
    * in. Defaults to the real clock; overridable so a test can pin "today"
@@ -512,6 +534,24 @@ function buildRunSqlTool(connections: AgentConnection[]): ToolDefinition {
     },
   };
 }
+
+const SEARCH_DOCUMENTS_TOOL_NAME = "search_documents";
+
+const SEARCH_DOCUMENTS_TOOL: ToolDefinition = {
+  name: SEARCH_DOCUMENTS_TOOL_NAME,
+  description:
+    "Search this workspace's ingested documents (contracts, reports, policies) for passages relevant " +
+    "to a question. Use this for questions about document content — never for questions answerable " +
+    "from the connected database, which run_sql already answers faster and more precisely.",
+  parameters: {
+    type: "object",
+    properties: {
+      query: { type: "string", description: "What to search for, in natural language." },
+    },
+    required: ["query"],
+    additionalProperties: false,
+  },
+};
 
 const GENERATE_ESG_REPORT_TOOL: ToolDefinition = {
   name: "generate_esg_report",
@@ -586,6 +626,7 @@ export async function* runAgent(input: AgentRunInput): AsyncGenerator<AgentEvent
   const tools = [
     ...(input.connections.length > 0 ? [buildRunSqlTool(input.connections)] : []),
     ...(input.reportGenerator ? [GENERATE_ESG_REPORT_TOOL] : []),
+    ...(input.documentSearch ? [SEARCH_DOCUMENTS_TOOL] : []),
   ];
   let answer = "";
   let reasoning = "";
@@ -635,23 +676,29 @@ export async function* runAgent(input: AgentRunInput): AsyncGenerator<AgentEvent
   let lastQueryNothingRepeats = false;
   let noWinnerCorrected = false;
   /**
-   * Every value this database has shown the model: the schema's value lists,
+   * Every value each database has shown the model: the schema's value lists,
    * plus the cells of every result read so far. This is what a filter literal
    * has to be backed by before an empty result may be called an absence.
+   *
+   * Keyed by connection id rather than one shared set: a value real on one
+   * connection must not excuse an absence claim about a different one in the
+   * same multi-connection run.
    *
    * Seeded from the schema rather than left empty, so the common case costs
    * nothing — with value hints in the prompt the model usually filters on a
    * spelling that is already in here, and the check stays silent.
    */
-  const vouched = new Set<string>();
+  const vouchedByConnection = new Map<string, Set<string>>();
   for (const connection of input.connections) {
+    const values = new Set<string>();
     for (const table of connection.schema ?? []) {
       for (const column of table.columns) {
         for (const value of column.distinct_values?.list ?? []) {
-          vouched.add(value.trim().toLowerCase());
+          values.add(value.trim().toLowerCase());
         }
       }
     }
+    vouchedByConnection.set(connection.id, values);
   }
   /**
    * Literals from the most recent query that came back empty, when nothing
@@ -1042,6 +1089,62 @@ export async function* runAgent(input: AgentRunInput): AsyncGenerator<AgentEvent
       toolChoice = "auto";
 
       for (const call of turn.toolCalls) {
+        if (call.name === SEARCH_DOCUMENTS_TOOL_NAME) {
+          if (!input.documentSearch) {
+            messages.push({
+              role: "tool",
+              toolCallId: call.id,
+              toolName: call.name,
+              content: "Document search is not available in this workspace.",
+              isError: true,
+            });
+            continue;
+          }
+
+          const query = typeof call.input.query === "string" ? call.input.query.trim() : "";
+          if (!query) {
+            messages.push({
+              role: "tool",
+              toolCallId: call.id,
+              toolName: call.name,
+              content: "The 'query' argument was empty. Say what to search for.",
+              isError: true,
+            });
+            continue;
+          }
+
+          try {
+            const found = await input.documentSearch.search(query);
+            yield emit({
+              label: `Searched documents: ${query}`,
+              status: "done",
+              detail: `${found.coverage.returned} of ${found.coverage.matched} matching passages`,
+              query_id: null,
+            });
+            messages.push({
+              role: "tool",
+              toolCallId: call.id,
+              toolName: call.name,
+              content: JSON.stringify(found),
+              isError: false,
+            });
+          } catch (error) {
+            const detail = error instanceof Error ? error.message : String(error);
+            // Never fabricate context in its place: a retrieval failure is
+            // reported to the model as exactly that, so it can say retrieval
+            // was unavailable rather than answer as if nothing existed to find.
+            yield emit({ label: `Searching documents: ${query}`, status: "failed", detail, query_id: null });
+            messages.push({
+              role: "tool",
+              toolCallId: call.id,
+              toolName: call.name,
+              content: `Document search failed: ${detail}`,
+              isError: true,
+            });
+          }
+          continue;
+        }
+
         if (call.name === GENERATE_ESG_REPORT_TOOL.name) {
           if (!input.reportGenerator) {
             messages.push({
@@ -1157,6 +1260,9 @@ export async function* runAgent(input: AgentRunInput): AsyncGenerator<AgentEvent
 
         try {
           const { queryId, result } = await target.execute(sql);
+          // Non-null: seeded above for every connection in input.connections,
+          // and target is always drawn from that same list.
+          const vouched = vouchedByConnection.get(target.id)!;
           lastQueryRowCount = result.row_count;
           lastQueryFoundNothing = foundNothing(result.rows, result.row_count);
           // Only a result that found nothing raises the question at all, and it
