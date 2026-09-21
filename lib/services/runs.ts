@@ -15,9 +15,8 @@ import { ApiError, toApiError } from "@/lib/api/errors";
 import { newId } from "@/lib/api/ids";
 import { runAgent, type AgentEvent, type AgentStep } from "@/lib/agent";
 import type { ResponseDetail } from "@/lib/agent/prompt";
-import type { SchemaTable } from "@/lib/connectors";
 import { stores } from "@/lib/providers";
-import { getSchema, listConnections, requireConnection, type ConnectionDoc } from "./connections";
+import { requireConnection, type ConnectionDoc } from "./connections";
 import {
   appendMessage,
   conversationHistory,
@@ -26,7 +25,7 @@ import {
 } from "./conversations";
 import { resolveModelClient } from "./model-providers";
 import { buildAgentContext } from "./playbook";
-import { runQuery, toQueryResult } from "./queries";
+import { resolveSources } from "./sources";
 import { notFound } from "@/lib/api/errors";
 
 export type RunDoc = {
@@ -162,42 +161,10 @@ export async function* executeRun(
 
     const playbookContext = await buildAgentContext(tenantId);
 
-    // Every connection this tenant has — the agent identifies which one a
-    // question is about itself (see lib/agent's run_sql "database"
-    // parameter), rather than being limited to whichever one a person
-    // picked before asking. Introspection failing for one connection
-    // doesn't kill the run or the others: that one is listed with an empty
-    // schema, so the agent knows it exists but not to guess table names on
-    // it.
-    const allConnections = (await listConnections(tenantId, { order: "asc", limit: 50, cursor: null })).data;
-    const agentConnections = await Promise.all(
-      allConnections.map(async (conn) => {
-        let schema: SchemaTable[] = [];
-        try {
-          schema = (await getSchema(tenantId, conn)).tables;
-        } catch (error) {
-          console.error("[runs] schema fetch failed, connection continues with an empty schema", conn.id, error);
-          schema = [];
-        }
-        return {
-          id: conn.id,
-          name: conn.name,
-          engine: conn.engine,
-          schema,
-          // Each query opens its own connector. That costs a connection setup
-          // per query; the alternative is holding one open across the whole
-          // run, including across model latency, which is worse for a database
-          // with a bounded connection pool.
-          execute: async (sql: string) => {
-            const query = await runQuery(tenantId, conn, { sql, userId });
-            if (query.status === "failed") {
-              throw new Error(query.error?.message ?? "The query failed.");
-            }
-            return { queryId: query.id, result: toQueryResult(query) };
-          },
-        };
-      })
-    );
+    // The databases and document libraries this workspace may use, decided by
+    // the application before the model is asked anything. See
+    // lib/services/sources.ts for why the model never chooses among them.
+    const { databases: agentConnections, libraries } = await resolveSources({ tenantId, userId });
 
     let final: Extract<AgentEvent, { type: "completed" }> | null = null;
     let failure: ApiError | null = null;
@@ -210,33 +177,6 @@ export async function* executeRun(
     // Fixed to this app's own Postgres schema (Report/Inventory/item_sustainability),
     // not the dynamically-configured `connection` above — a conversation's chosen
     // data source has no bearing on whether the ESG report pipeline is available.
-    // Null when this deployment has no syslab-server retrieval endpoint
-    // configured, the same "absent means the tool is not offered" shape
-    // reportGenerator below uses — a workspace with no documents ingested
-    // there should not fail differently from one that never configured it.
-    const documentSearch: NonNullable<Parameters<typeof runAgent>[0]["documentSearch"]> | null =
-      process.env.RETRIEVAL_BASE_URL && process.env.RETRIEVAL_TOKEN
-        ? {
-            search: async (query: string) => {
-              const { RetrievalClient } = await import("./retrieval-client");
-              const client = new RetrievalClient({
-                baseUrl: process.env.RETRIEVAL_BASE_URL!,
-                token: process.env.RETRIEVAL_TOKEN!,
-              });
-              const result = await client.retrieve(query, tenantId);
-              return {
-                passages: result.passages.map((p) => ({
-                  source: p.source,
-                  text: p.text,
-                  found_by: p.found_by,
-                })),
-                coverage: result.coverage,
-                what_this_means: result.what_this_means,
-              };
-            },
-          }
-        : null;
-
     const reportGenerator: NonNullable<Parameters<typeof runAgent>[0]["reportGenerator"]> = {
       generate: async ({ hospitalName, hospitalGroup, year, month }) => {
         const { aggregateEsgReport } = await import("./esg-report");
@@ -313,7 +253,7 @@ export async function* executeRun(
       connections: agentConnections,
       client: resolved?.client ?? null,
       reportGenerator,
-      documentSearch,
+      libraries,
     })) {
       if (event.type === "step") {
         steps.push(event.step);

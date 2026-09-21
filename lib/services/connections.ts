@@ -34,6 +34,12 @@ export type ConnectionDoc = {
    */
   kind?: "database";
   name: string;
+  /**
+   * What this database holds, in an administrator's words. Optional and, for
+   * now, nothing writes it. It is shown to the agent as data (see
+   * `sanitizeDescription`), never as an instruction.
+   */
+  description?: string | null;
   engine: Engine;
   status: ConnectionStatus;
   status_checked_at: string | null;
@@ -75,6 +81,8 @@ export type MediaConnectionDoc = {
   kind: "media";
   engine: "media";
   name: string;
+  /** What this library holds, in an administrator's words. Optional; shown to the agent as data. */
+  description?: string | null;
   /**
    * Absent means enabled, so a record written without it is usable. A
    * disabled one stays in the store and is simply not offered to the agent.
@@ -201,6 +209,64 @@ export async function findAnyConnection(
   connectionId: string
 ): Promise<StoredConnectionDoc | null> {
   return stores().documents.get<StoredConnectionDoc>("connections", tenantId, connectionId);
+}
+
+/**
+ * Is this record a usable media connection?
+ *
+ * Exact on purpose. Only `kind: "media"` with `engine: "media"` counts, and it
+ * must carry the two things a search needs: a key for the library and a server
+ * reference. Anything else that is not a database (a kind added later, a
+ * half-written record) is neither a database nor a library, and is skipped
+ * rather than guessed at.
+ */
+export function isMediaConnection(doc: StoredConnectionDoc): doc is MediaConnectionDoc {
+  const candidate = doc as { kind?: unknown; engine?: unknown; name?: unknown; media?: unknown };
+  const media = candidate.media as { alias_id?: unknown; server_ref?: unknown } | null | undefined;
+  return (
+    candidate.kind === "media" &&
+    candidate.engine === "media" &&
+    typeof candidate.name === "string" &&
+    candidate.name.trim() !== "" &&
+    typeof media?.alias_id === "string" &&
+    media.alias_id.trim() !== "" &&
+    typeof media?.server_ref === "string" &&
+    media.server_ref.trim() !== ""
+  );
+}
+
+/** Reads at most this many records looking for libraries. A workspace has a handful. */
+const MEDIA_SCAN_LIMIT = 1000;
+
+/**
+ * This workspace's media connections, oldest first.
+ *
+ * The one place that lists them. It is the counterpart of `listConnections`
+ * and, like it, is decided here and not by a caller: `listConnections` returns
+ * only databases and this returns only libraries, so no caller can be handed
+ * the wrong kind by asking the wrong question. Only the source resolver calls
+ * it, and a test keeps that list short.
+ */
+export async function listMediaConnections(tenantId: string): Promise<MediaConnectionDoc[]> {
+  const found: MediaConnectionDoc[] = [];
+  const pageSize = 100;
+  let startAfter: { sort: string; id: string } | undefined;
+
+  for (let scanned = 0; scanned < MEDIA_SCAN_LIMIT; scanned += pageSize) {
+    const batch = await stores().documents.list<StoredConnectionDoc>("connections", tenantId, {
+      orderBy: "created_at",
+      order: "asc",
+      startAfter,
+      limit: pageSize,
+    });
+    for (const doc of batch) {
+      if (isMediaConnection(doc)) found.push(doc);
+    }
+    if (batch.length < pageSize) break;
+    const last = batch[batch.length - 1];
+    startAfter = { sort: last.created_at, id: last.id };
+  }
+  return found;
 }
 
 /** A database by id. A media connection's id is not found here, as if it did not exist. */

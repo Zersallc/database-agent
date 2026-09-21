@@ -127,7 +127,9 @@ answer is vague.
 | Variable | Default | Notes |
 |---|---|---|
 | `BIGQUERY_MAX_BYTES_BILLED` | 1 GiB | Per-query ceiling — a runaway query fails cheaply instead of succeeding expensively |
-| `MEDIA_CONNECTIONS_ENABLED` | `false` | Reserved for the media (document library) connection type. Only `true` or `1` turns it on. It has no effect yet: what keeps database paths away from media records does not depend on it |
+| `MEDIA_CONNECTIONS_ENABLED` | `false` | Whether the agent is offered a workspace's media connections as document libraries. Only `true` or `1` turns it on. It is also the kill switch: off, every library disappears from the agent and the records stay untouched. What keeps database paths away from media records does not depend on it |
+| `RETRIEVAL_BASE_URL`, `RETRIEVAL_TOKEN` | unset | The deployment's `default` syslab-server, which media connections name by reference. Never stored on a connection. Without them a library's search reports "not set up" |
+| `RETRIEVAL_REQUEST_TIMEOUT_MS` | 15000 | How long one document search may take before it is reported as timed out |
 
 ### Limits and behavior
 
