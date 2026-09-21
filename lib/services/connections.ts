@@ -7,7 +7,7 @@
  * connection document holds a handle, not a password.
  */
 
-import { notFound } from "@/lib/api/errors";
+import { ApiError, notFound } from "@/lib/api/errors";
 import { newId } from "@/lib/api/ids";
 import { buildPage, type ListParams, type Page } from "@/lib/api/pagination";
 import {
@@ -27,6 +27,12 @@ export type ConnectionStatus = "connected" | "degraded" | "offline" | "unknown";
 export type ConnectionDoc = {
   id: string;
   object: "connection";
+  /**
+   * Absent on every connection written before other kinds existed, and still
+   * not written for a database: absent and "database" mean the same thing, so
+   * no stored document has to change. See `isDatabaseConnection`.
+   */
+  kind?: "database";
   name: string;
   engine: Engine;
   status: ConnectionStatus;
@@ -53,6 +59,72 @@ export type ConnectionDoc = {
   created_at: string;
   updated_at: string;
 };
+
+/**
+ * A document library, stored beside the databases in the same collection.
+ *
+ * It is not a database and nothing on the SQL side may treat it as one, so it
+ * is a separate type rather than another `Engine`: `engine: "media"` here is
+ * not a member of `Engine`, and `createConnector` has no factory for it. This
+ * step only defines the record and makes every database path ignore it; nothing
+ * creates one yet.
+ */
+export type MediaConnectionDoc = {
+  id: string;
+  object: "connection";
+  kind: "media";
+  engine: "media";
+  name: string;
+  /**
+   * Absent means enabled, so a record written without it is usable. A
+   * disabled one stays in the store and is simply not offered to the agent.
+   */
+  enabled?: boolean;
+  status: ConnectionStatus;
+  status_checked_at: string | null;
+  status_detail: string | null;
+  /**
+   * Where this connection's documents live. The syslab-server URL and token are
+   * deployment configuration resolved through `server_ref`, never stored here.
+   * `library_ref` is an opaque note of which library this points at, for people
+   * to read: nothing may branch on its value.
+   */
+  media: { alias_id: string; library_ref: string | null; server_ref: string };
+  created_at: string;
+  updated_at: string;
+};
+
+/** Whatever the `connections` collection can hold. */
+export type StoredConnectionDoc = ConnectionDoc | MediaConnectionDoc;
+
+/**
+ * Is this record a database this app can open a connector for?
+ *
+ * The one place that decides it, and it fails closed. A record counts as a
+ * database only when `kind` is absent (everything written before this existed)
+ * or "database", and its engine is not "media". A `kind` this code has never
+ * heard of is therefore not a database either: a later version adding a third
+ * kind must not find this version running SQL against it.
+ */
+export function isDatabaseConnection(doc: StoredConnectionDoc): doc is ConnectionDoc {
+  const { kind, engine } = doc as { kind?: unknown; engine?: unknown };
+  return (kind === undefined || kind === "database") && engine !== "media";
+}
+
+/**
+ * Refuses anything that is not a database, at the points that would otherwise
+ * read a credential, open a connector or run a statement.
+ *
+ * The lookups below already return only databases, so reaching this with
+ * anything else means a caller went round them. Refusing here is the second
+ * wall, and it is what keeps "never treated as a database" true of code that
+ * has not been written yet.
+ */
+export function assertDatabaseConnection(doc: StoredConnectionDoc): asserts doc is ConnectionDoc {
+  if (!isDatabaseConnection(doc)) {
+    throw new ApiError("invalid_request", `Connection '${doc.id}' is not a database connection.`);
+  }
+}
 
 /** The wire shape. Anything not listed here does not leave the server. */
 export function serializeConnection(doc: ConnectionDoc) {
@@ -81,26 +153,63 @@ function credentialHandle(connectionId: string): string {
   return `connection-credentials-${connectionId}`;
 }
 
+/**
+ * The workspace's databases. Only databases: a media connection stored in the
+ * same collection is skipped here, which is what keeps every caller that turns
+ * these into SQL connectors (the agent, Database Mapping, the API) from ever
+ * being handed one. Asking for anything else takes `findAnyConnection`.
+ */
 export async function listConnections(
   tenantId: string,
   params: ListParams,
   filters: { status?: ConnectionStatus } = {}
 ): Promise<Page<ConnectionDoc>> {
-  const docs = await stores().documents.list<ConnectionDoc>("connections", tenantId, {
-    where: filters.status ? [{ field: "status", equals: filters.status }] : undefined,
-    orderBy: "created_at",
-    order: params.order,
-    startAfter: params.cursor ? { sort: params.cursor.sort, id: params.cursor.id } : undefined,
-    limit: params.limit + 1,
-  });
-  return buildPage(docs, params, (doc) => ({ sort: doc.created_at, id: doc.id }));
+  // One more than a page, to learn whether another exists.
+  const wanted = params.limit + 1;
+  const databases: ConnectionDoc[] = [];
+  let startAfter = params.cursor ? { sort: params.cursor.sort, id: params.cursor.id } : undefined;
+
+  // One round trip, the same query as before, unless a media record sat inside
+  // the window. Only then does it read on, so a page is never short merely
+  // because a library was stored between two databases.
+  for (;;) {
+    const batch = await stores().documents.list<StoredConnectionDoc>("connections", tenantId, {
+      where: filters.status ? [{ field: "status", equals: filters.status }] : undefined,
+      orderBy: "created_at",
+      order: params.order,
+      startAfter,
+      limit: wanted,
+    });
+    for (const doc of batch) {
+      if (isDatabaseConnection(doc)) databases.push(doc);
+    }
+    if (databases.length >= wanted || batch.length < wanted) break;
+    const last = batch[batch.length - 1];
+    startAfter = { sort: last.created_at, id: last.id };
+  }
+
+  return buildPage(databases.slice(0, wanted), params, (doc) => ({ sort: doc.created_at, id: doc.id }));
 }
 
+/**
+ * A connection of any kind, by id. The deliberate exception to the lookups
+ * around it: nothing that runs SQL, binds a conversation or lists databases may
+ * call this, and a test keeps that list of callers short and named.
+ */
+export async function findAnyConnection(
+  tenantId: string,
+  connectionId: string
+): Promise<StoredConnectionDoc | null> {
+  return stores().documents.get<StoredConnectionDoc>("connections", tenantId, connectionId);
+}
+
+/** A database by id. A media connection's id is not found here, as if it did not exist. */
 export async function findConnection(
   tenantId: string,
   connectionId: string
 ): Promise<ConnectionDoc | null> {
-  return stores().documents.get<ConnectionDoc>("connections", tenantId, connectionId);
+  const doc = await findAnyConnection(tenantId, connectionId);
+  return doc && isDatabaseConnection(doc) ? doc : null;
 }
 
 export async function requireConnection(
@@ -222,6 +331,7 @@ export async function deleteConnection(tenantId: string, connectionId: string): 
 
 /** Reads a connection's raw credentials. One of two paths to a secret (see connectorOptions). */
 export async function readCredentials(doc: ConnectionDoc): Promise<Credentials> {
+  assertDatabaseConnection(doc);
   if (!doc.credential_handle) return {};
   const raw = await stores().secrets.read(doc.credential_handle);
   if (!raw) return {};
@@ -237,6 +347,7 @@ export async function readCredentials(doc: ConnectionDoc): Promise<Credentials> 
 
 /** Reads credentials and assembles connector options. The other path to a secret. */
 export async function connectorOptions(doc: ConnectionDoc): Promise<ConnectorOptions> {
+  assertDatabaseConnection(doc);
   const credentials = await readCredentials(doc);
   return {
     credentials,
@@ -247,6 +358,7 @@ export async function connectorOptions(doc: ConnectionDoc): Promise<ConnectorOpt
 }
 
 export async function testConnection(tenantId: string, doc: ConnectionDoc) {
+  assertDatabaseConnection(doc);
   const connector = createConnector(doc.engine, await connectorOptions(doc));
   try {
     const probe = await connector.probe();
@@ -298,6 +410,9 @@ export async function getSchema(
   doc: ConnectionDoc,
   options: { refresh?: boolean } = {}
 ): Promise<{ tables: SchemaTable[]; cached: boolean; fetched_at: string }> {
+  // Before the cache is read: a cached schema must not answer for a record
+  // that is not a database.
+  assertDatabaseConnection(doc);
   const key = schemaCacheKey(tenantId, doc.id);
 
   if (!options.refresh) {

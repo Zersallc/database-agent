@@ -12,7 +12,7 @@ import { newId } from "@/lib/api/ids";
 import { assertStatementAllowed } from "@/lib/connectors/sql-guard";
 import { translateConnectorError, withConnector, type QueryResult } from "@/lib/connectors";
 import { stores } from "@/lib/providers";
-import { connectorOptions, type ConnectionDoc } from "./connections";
+import { assertDatabaseConnection, connectorOptions, type ConnectionDoc } from "./connections";
 
 /**
  * Applied whenever a caller doesn't specify one — which today is every
@@ -84,6 +84,9 @@ export async function runQuery(
   connection: ConnectionDoc,
   input: RunQueryInput
 ): Promise<QueryDoc> {
+  // First, before the statement is even read: nothing that is not a database
+  // gets as far as a guard, a credential or a connector.
+  assertDatabaseConnection(connection);
   assertStatementAllowed(input.sql, connection.allow_writes);
 
   const id = newId("query");

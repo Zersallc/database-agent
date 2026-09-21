@@ -127,6 +127,7 @@ answer is vague.
 | Variable | Default | Notes |
 |---|---|---|
 | `BIGQUERY_MAX_BYTES_BILLED` | 1 GiB | Per-query ceiling — a runaway query fails cheaply instead of succeeding expensively |
+| `MEDIA_CONNECTIONS_ENABLED` | `false` | Reserved for the media (document library) connection type. Only `true` or `1` turns it on. It has no effect yet: what keeps database paths away from media records does not depend on it |
 
 ### Limits and behavior
 
