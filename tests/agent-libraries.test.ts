@@ -347,7 +347,10 @@ describe("one source, another, or both", () => {
       turns: [
         { text: "", toolCalls: [runSql("c1", { sql: "SELECT count(*) FROM orders WHERE late", purpose: "count late orders" })] },
         { text: "", toolCalls: [search("c2", { query: "late delivery penalty" })] },
-        { text: "Twelve orders were late. The contract allows termination on 30 days' notice." },
+        // Closed with a Sources block, as the prompt asks after a document search:
+        // a run that used documents and did not would be given the provenance
+        // retry (agent-provenance.test.ts), which is not what this test is about.
+        { text: "Twelve orders were late. The contract allows termination on 30 days' notice.\n\nSources:\nPostgreSQL — Sales\ncontract_03.pdf" },
       ],
     });
     assert.equal(sales.calls.length, 1);
@@ -365,7 +368,8 @@ describe("one source, another, or both", () => {
       libraries: [contracts.library],
       turns: [
         { text: "", toolCalls: [search("c1", { query: "termination notice" })] },
-        { text: "Either party may terminate on 30 days' notice (contract_03.pdf)." },
+        // With its Sources block, so the only retry that could fire is the one for unbacked figures.
+        { text: "Either party may terminate on 30 days' notice (contract_03.pdf).\n\nSources:\ncontract_03.pdf" },
       ],
     });
     assert.equal(client.requests.length, 2, "one turn to search, one to answer, and no retry");

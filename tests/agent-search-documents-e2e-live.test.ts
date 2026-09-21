@@ -19,6 +19,7 @@ import assert from "node:assert/strict";
 
 import { runAgent, type AgentEvent } from "@/lib/agent";
 import { DOCUMENT_SEARCH_MESSAGES } from "@/lib/agent/libraries";
+import { asLiteralMarkdown } from "@/lib/agent/provenance";
 import type { ModelClient, ModelStreamEvent, ModelTurn } from "@/lib/agent/providers";
 import { stores } from "@/lib/providers";
 import type { MediaConnectionDoc } from "@/lib/services/connections";
@@ -132,13 +133,18 @@ test("database-agent -> media connection -> search_documents -> syslab-server ->
   assert.equal(libraries[0].name, "Contracts");
 
   let capturedRawToolResult = "";
+  let citedFile = "";
   const client = scriptedModelClient((toolResultText) => {
     capturedRawToolResult = toolResultText;
     const parsed = JSON.parse(toolResultText);
     const vectorHit = parsed.passages.find((p: { found_by: string[] }) => p.found_by.includes("vector"));
-    return vectorHit
-      ? `Based on the retrieved passages, found a relevant clause in ${vectorHit.source} (found_by: ${vectorHit.found_by.join(", ")}).`
-      : "No relevant passages were found.";
+    if (!vectorHit) return "No relevant passages were found.";
+    citedFile = vectorHit.source;
+    // The model cites the file syslab really returned and one it made up.
+    return (
+      `Based on the retrieved passages, found a relevant clause in ${vectorHit.source} (found_by: ${vectorHit.found_by.join(", ")}).` +
+      `\n\nSources:\n${vectorHit.source}\nmade_up_by_the_model.pdf`
+    );
   });
 
   const { events, completed } = await run(libraries, client);
@@ -166,6 +172,13 @@ test("database-agent -> media connection -> search_documents -> syslab-server ->
   // would render to the user.
   assert.ok(completed, "expected a completed event");
   assert.match(completed!.content, /found_by: .*vector/);
+
+  // 5. Provenance against the real service: the file name syslab returned is
+  // what the ledger holds, so the cited file survives and the invented one
+  // does not.
+  assert.ok(citedFile, "a vector hit names its source file");
+  assert.ok(completed!.content.endsWith(asLiteralMarkdown(citedFile)), `the block should end with the real file: ${completed!.content.slice(-200)}`);
+  assert.ok(!completed!.content.includes("made_up_by_the_model"), "an invented file must not survive the check");
 
   console.log(`  tool result passages: ${parsedToolResult.passages.length}`);
   console.log(`  final answer: ${completed!.content}`);

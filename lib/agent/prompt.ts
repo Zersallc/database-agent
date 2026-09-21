@@ -10,6 +10,7 @@
 
 import type { SchemaColumn, SchemaTable } from "@/lib/connectors";
 import { sanitizeDescription } from "./libraries";
+import { databaseSourceLine } from "./provenance";
 
 export type ResponseDetail = "concise" | "balanced" | "detailed";
 
@@ -390,6 +391,45 @@ function renderSourceChoice(databaseCount: number): string {
   );
 }
 
+/**
+ * How to close an answer that used documents.
+ *
+ * The model writes the block; the application decides what is in it. Each line
+ * is checked against what this run actually retrieved and queried, and a line
+ * the run cannot back is removed (see lib/agent/provenance.ts), so this asks
+ * for a list the model can produce honestly rather than one it must trust
+ * itself about. The database lines are given whole, from the same function the
+ * check uses, so the model copies them instead of composing them.
+ *
+ * Only present when there are libraries: a workspace with databases only has
+ * nothing to cite beyond the queries the reader can already see.
+ *
+ * The block is asked for as what follows a search, not as a rule about answers
+ * that "use what a document says". That wording made the model weigh whether
+ * its answer would use a document before it had looked, and it sometimes
+ * settled the question by saying the documents did not cover it without
+ * searching. Compared against the real model with the section left out, that
+ * wording searched in 46 of 58 informal runs against 53 of 53; this one
+ * searched in 24 of 24, and the model wrote the block itself in all of them.
+ * See tests/agent-provenance.test.ts, which pins the framing.
+ */
+function renderSources(connections: PromptConnection[], libraries: PromptLibrary[]): string {
+  const databaseLines = connections.map((c) => databaseSourceLine(c.engine, c.name));
+  return (
+    "## Sources\n\n" +
+    "After search_documents returns passages, finish your answer with a Sources block: the line \"Sources:\" and " +
+    "then one line for each source you relied on. Nothing else goes in the block and nothing comes after it.\n\n" +
+    "- A document is its file name exactly as search_documents returned it" +
+    (libraries.length > 1 ? ", followed by its library in parentheses: file name (library name)" : "") +
+    ".\n" +
+    (databaseLines.length > 0
+      ? `- A database is written exactly as ${databaseLines.map((line) => JSON.stringify(line)).join(" or ")}; ` +
+        "include one only if you queried it for this answer.\n"
+      : "") +
+    "\nList only files a search returned and databases you actually queried; a line that cannot be confirmed is removed."
+  );
+}
+
 /** A database's description as one plain line, or nothing. */
 function holds(connection: PromptConnection): string | null {
   return sanitizeDescription(connection.description);
@@ -458,6 +498,7 @@ export function buildSystemPrompt(input: PromptInput): string {
     ...(libraries.length > 0 && input.connections.length + libraries.length > 1
       ? [renderSourceChoice(input.connections.length)]
       : []),
+    ...(libraries.length > 0 ? [renderSources(input.connections, libraries)] : []),
     OUTPUT_FORMAT,
     DETAIL_GUIDANCE[input.responseDetail],
     renderCurrentDate(input.now),

@@ -40,6 +40,7 @@ import {
   resolveLibrary,
   type AgentLibrary,
 } from "./libraries";
+import { ProvenanceLedger, checkSources, sourcesCorrection } from "./provenance";
 import { buildSystemPrompt, type ResponseDetail } from "./prompt";
 import { ModelProviderError } from "./providers";
 import type { ModelClient, ModelMessage, ModelTurn, ToolDefinition } from "./providers";
@@ -630,6 +631,15 @@ export async function* runAgent(input: AgentRunInput): AsyncGenerator<AgentEvent
   let forcedRetryUsed = false;
   let toolChoice: "auto" | "required" = "auto";
   /**
+   * What this run really did as far as sources go: databases that returned a
+   * successful query and (library, file) pairs a search returned. Written only
+   * from results the loop received, never from anything the model said, and
+   * consulted when an answer closes with a Sources block. See ./provenance.
+   */
+  const ledger = new ProvenanceLedger();
+  const sourceStyle = { showLibrary: libraries.length > 1 };
+  let sourcesCorrected = false;
+  /**
    * Rows the most recent successful query returned. The *last* one rather than
    * the run's total on purpose: a turn that finds rows and then asks a narrower
    * question which legitimately comes back empty should be able to say so.
@@ -1056,9 +1066,42 @@ export async function* runAgent(input: AgentRunInput): AsyncGenerator<AgentEvent
           continue;
         }
 
+        /**
+         * Sources. Only in a workspace that has libraries: without them the
+         * model was never asked for a block, and what it writes is left alone.
+         *
+         * The block the model wrote is checked against the ledger and rebuilt
+         * from the lines the ledger backs. If a search returned documents and
+         * no valid block came out, that is one corrective retry, spent the
+         * same way as the ones above; after it the answer goes out as it is,
+         * without a block rather than with an unbacked one.
+         *
+         * `completed.content` is what the reader ends up with: the client
+         * replaces whatever it streamed with it, and it is what is stored.
+         */
+        let finalContent = answer.trim();
+        if (libraries.length > 0) {
+          const checked = checkSources(answer, ledger, sourceStyle);
+          if (!sourcesCorrected && ledger.retrievedDocuments > 0 && checked.kept === 0) {
+            sourcesCorrected = true;
+            yield emit({
+              label: "Answered from documents without listing sources — retrying",
+              status: "done",
+              detail: "A search returned documents, but the answer had no Sources block that could be confirmed.",
+              query_id: null,
+            });
+            messages.push({ role: "user", content: sourcesCorrection(ledger, sourceStyle) });
+            answer = "";
+            reasoning = "";
+            yield { type: "reset" };
+            continue;
+          }
+          finalContent = checked.text.trim();
+        }
+
         yield {
           type: "completed",
-          content: answer.trim(),
+          content: finalContent,
           thinking: reasoning.trim() || null,
           steps,
           model,
@@ -1114,6 +1157,10 @@ export async function* runAgent(input: AgentRunInput): AsyncGenerator<AgentEvent
 
           try {
             const found = await library.search(query);
+            ledger.recordDocuments(
+              library.name,
+              Array.isArray(found.passages) ? found.passages.map((passage) => passage.source) : []
+            );
             yield emit({
               label: `Searched ${where}: ${query}`,
               status: "done",
@@ -1262,6 +1309,7 @@ export async function* runAgent(input: AgentRunInput): AsyncGenerator<AgentEvent
 
         try {
           const { queryId, result } = await target.execute(sql);
+          ledger.recordQuery(target.engine, target.name);
           // Non-null: seeded above for every connection in input.connections,
           // and target is always drawn from that same list.
           const vouched = vouchedByConnection.get(target.id)!;
@@ -1340,7 +1388,7 @@ export async function* runAgent(input: AgentRunInput): AsyncGenerator<AgentEvent
     yield {
       type: "completed",
       content:
-        answer.trim() ||
+        (libraries.length > 0 ? checkSources(answer, ledger, sourceStyle).text.trim() : answer.trim()) ||
         "I could not finish this within the step limit. Narrowing the question usually helps.",
       thinking: reasoning.trim() || null,
       steps,
