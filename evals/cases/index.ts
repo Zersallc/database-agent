@@ -9,9 +9,24 @@ import { answerShape } from "./answer-shape.eval";
 import { noInventedAttribution } from "./no-invented-attribution.eval";
 import { followUpRowOnScreen } from "./follow-up-row-on-screen.eval";
 import { mostCommonOverFreeText } from "./most-common-over-free-text.eval";
+import { mediaPostgresOnlyCases } from "./media-postgres-only.eval";
+import { mediaOnlyCases } from "./media-only.eval";
+import { mediaCrossSourceCases } from "./media-cross-source.eval";
+import { mediaMultiLibraryCases } from "./media-multi-library.eval";
+import { mediaAmbiguityCases } from "./media-ambiguity.eval";
+import { mediaUnauthorizedCases } from "./media-unauthorized.eval";
+import { mediaEfficiencyCases } from "./media-efficiency.eval";
+import { mediaVagueCases } from "./media-vague.eval";
+import { mediaLiveCases } from "./media-live.eval";
 import type { EvalCase } from "../types";
 
-export const ALL_CASES: EvalCase[] = [
+/**
+ * The eleven cases the suite had before media connections. They run in a
+ * workspace with databases only, which is what the A0 baseline measured, and
+ * they can also be run with a library attached (`--with-library`) to see whether
+ * merely having one changes how SQL questions are handled.
+ */
+export const LEGACY_CASES: EvalCase[] = [
   betweenBoundary,
   relativeDateRecall,
   connectionLabelAsSchema,
@@ -24,3 +39,25 @@ export const ALL_CASES: EvalCase[] = [
   followUpRowOnScreen,
   mostCommonOverFreeText,
 ];
+
+/**
+ * The media-connection cases, against fixture libraries and a stubbed database,
+ * so what comes back is the same every time and only the model varies. The nine
+ * families the plan named, plus vague requests for documents.
+ */
+export const MEDIA_CASES: EvalCase[] = [
+  ...mediaPostgresOnlyCases,
+  ...mediaOnlyCases,
+  ...mediaCrossSourceCases,
+  ...mediaMultiLibraryCases,
+  ...mediaAmbiguityCases,
+  ...mediaUnauthorizedCases,
+  ...mediaEfficiencyCases,
+  ...mediaVagueCases,
+];
+
+/** Cases against a real syslab-server tenant. Need RETRIEVAL_* in the environment. */
+export const LIVE_CASES: EvalCase[] = mediaLiveCases;
+
+/** Everything that runs without a syslab-server. What `npm run eval` runs. */
+export const ALL_CASES: EvalCase[] = [...LEGACY_CASES, ...MEDIA_CASES];
