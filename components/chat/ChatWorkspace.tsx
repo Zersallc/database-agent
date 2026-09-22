@@ -51,6 +51,7 @@ export function ChatWorkspace() {
     activeConversation,
     activeConnection,
     connections,
+    hasEnabledLibrary,
     loading: workspaceLoading,
     error: workspaceError,
   } = useWorkspace();
@@ -205,12 +206,15 @@ export function ChatWorkspace() {
     );
   }
 
-  if (workspaceError || connections.length === 0) {
+  // A workspace may have a database connection, an enabled document library,
+  // both, or (blocked below) neither — connections.length alone used to be
+  // the whole story before media connections existed; it no longer is.
+  if (workspaceError || (connections.length === 0 && !hasEnabledLibrary)) {
     return (
       <div className="flex h-svh flex-col">
         <PageHeader title="Chat" />
         <div className="flex flex-1 flex-col items-center justify-center gap-2 text-center text-sm text-muted-foreground">
-          <p>{workspaceError ?? "No database connection is set up for this workspace yet."}</p>
+          <p>{workspaceError ?? "No database connection or document library is set up for this workspace yet."}</p>
         </div>
       </div>
     );
@@ -285,7 +289,10 @@ export function ChatWorkspace() {
             onAttachmentsChange={setAttachments}
             onSubmit={() => void send(input)}
             disabled={running}
-            placeholder={`Ask ${activeConnection.name} anything…`}
+            // A media-only workspace has no real activeConnection (its id is
+            // the "" fallback, name "No connection") — naming it here would
+            // read as broken, so fall back to a source-agnostic placeholder.
+            placeholder={activeConnection.id ? `Ask ${activeConnection.name} anything…` : "Ask anything…"}
           />
         </div>
       </div>

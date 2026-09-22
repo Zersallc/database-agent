@@ -30,7 +30,7 @@ import {
 import { categorizeRetrievalFailure } from "@/lib/services/document-search";
 import { resolveMediaServer } from "@/lib/services/media-server";
 import { RetrievalError } from "@/lib/services/retrieval-client";
-import { resolveSources } from "@/lib/services/sources";
+import { hasEnabledLibrary, resolveSources } from "@/lib/services/sources";
 
 const BASE_URL = "http://media.test.invalid:8080/api/v1";
 const TOKEN = "test-token-not-a-real-credential-0123456789";
@@ -438,6 +438,58 @@ describe("the pieces underneath", () => {
     const found = await listMediaConnections(tenant);
     assert.equal(found.length, 130);
     assert.deepEqual(found.map((d) => d.id), docs.slice(0, 130).map((d) => d.id));
+  });
+
+  // hasEnabledLibrary backs the chat UI's own availability check (see
+  // lib/chat-store.ts) and is deliberately narrower than resolveSources: it
+  // must never introspect a database, only answer "is there a library".
+  describe("hasEnabledLibrary", () => {
+    test("true only when the flag is on and an active library exists", async () => {
+      const tenant = newTenant();
+      await seed(tenant, [mediaDoc("m1", "Contracts", 1)]);
+      assert.equal(await hasEnabledLibrary(tenant, ON), true);
+    });
+
+    test("false when the deployment flag is off, even with an enabled library", async () => {
+      const tenant = newTenant();
+      await seed(tenant, [mediaDoc("m1", "Contracts", 1)]);
+      for (const env of [{}, { ...ON, MEDIA_CONNECTIONS_ENABLED: undefined }, { ...ON, MEDIA_CONNECTIONS_ENABLED: "false" }]) {
+        assert.equal(await hasEnabledLibrary(tenant, env), false);
+      }
+    });
+
+    test("false when every library is individually disabled", async () => {
+      const tenant = newTenant();
+      await seed(tenant, [mediaDoc("m1", "Contracts", 1, { enabled: false })]);
+      assert.equal(await hasEnabledLibrary(tenant, ON), false);
+    });
+
+    test("true if at least one of several libraries is active", async () => {
+      const tenant = newTenant();
+      await seed(tenant, [
+        mediaDoc("m1", "Contracts", 1, { enabled: false }),
+        mediaDoc("m2", "Policies", 2, { enabled: true }),
+      ]);
+      assert.equal(await hasEnabledLibrary(tenant, ON), true);
+    });
+
+    test("false for a workspace with no media connections at all", async () => {
+      const tenant = newTenant();
+      await seed(tenant, [databaseDoc("d1", "Sales", 1)]);
+      assert.equal(await hasEnabledLibrary(tenant, ON), false);
+    });
+
+    test("does not touch the network — no search closures are built", async () => {
+      const tenant = newTenant();
+      await seed(tenant, [mediaDoc("m1", "Contracts", 1)]);
+      const net = fakeNetwork();
+      try {
+        await hasEnabledLibrary(tenant, ON);
+      } finally {
+        net.restore();
+      }
+      assert.equal(net.requests.length, 0);
+    });
   });
 });
 

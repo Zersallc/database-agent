@@ -13,7 +13,7 @@ import { test, describe } from "node:test";
 import assert from "node:assert/strict";
 
 import { classifyRun, providerErrorOf } from "@/evals/classify";
-import { runCaseRepeated, toolCallsIn } from "@/evals/harness";
+import { cleanupOrThrow, runCaseRepeated, toolCallsIn } from "@/evals/harness";
 import { buildFixtureLibraries, searchFixture } from "@/evals/libraries";
 import { CONTRACTS, HR_POLICIES, salesDatabase } from "@/evals/media-fixtures";
 import { emptyMeter, meteredClient, pacedClient } from "@/evals/meter";
@@ -21,6 +21,46 @@ import { fisherExact, wilson } from "@/evals/stats";
 import type { EvalCase } from "@/evals/types";
 import type { ModelClient, ModelRequest, ModelStreamEvent, ToolCall } from "@/lib/agent/providers/types";
 import { ModelProviderError } from "@/lib/agent/providers/types";
+
+/**
+ * The bug this guards against: `liveLibrary`'s cleanup used to log a failed
+ * delete and continue, so a live case whose ephemeral connection record
+ * COULD NOT be removed still reported as if it had run cleanly — exactly how
+ * 30 stray rows accumulated silently before anyone noticed. `cleanupOrThrow`
+ * exists specifically so that failure surfaces instead of hiding.
+ */
+describe("cleanupOrThrow: a failed delete must fail the run, not hide behind it", () => {
+  test("resolves quietly when the delete succeeds", async () => {
+    let called = false;
+    await cleanupOrThrow(async () => {
+      called = true;
+    }, "ten_test_1");
+    assert.equal(called, true);
+  });
+
+  test("throws when the delete itself rejects, naming what failed", async () => {
+    await assert.rejects(
+      () => cleanupOrThrow(() => Promise.reject(new Error("connection refused")), "ten_test_2"),
+      (error: Error) => {
+        assert.match(error.message, /ten_test_2/);
+        assert.match(error.message, /connection refused/);
+        return true;
+      }
+    );
+  });
+
+  test("a thrown cleanup error, from inside a finally, replaces a successful try result rather than being silently swallowed", async () => {
+    // The exact shape liveLibrary uses: try { ...succeed... } finally { await cleanupOrThrow(...) }.
+    async function example(): Promise<string> {
+      try {
+        return "this looked like it worked";
+      } finally {
+        await cleanupOrThrow(() => Promise.reject(new Error("delete failed")), "ten_test_3");
+      }
+    }
+    await assert.rejects(() => example(), /delete failed/);
+  });
+});
 
 describe("classifyRun: which runs are the model's to pass or fail", () => {
   const failure = (retryAfter: number | null = null) => ({ code: "upstream_model_error", message: "x", retryAfter });

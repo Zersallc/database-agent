@@ -41,8 +41,8 @@ import { stores } from "@/lib/providers";
 import type { MediaConnectionDoc } from "@/lib/services/connections";
 import { resolveSources } from "@/lib/services/sources";
 
-import { ALL_CASES, LEGACY_CASES, LIVE_CASES, MEDIA_CASES } from "./cases/index";
-import { buildRealClient, runCaseRepeated, type RunOptions } from "./harness";
+import { ALL_CASES, KNOWN_ANSWER_CASES, LEGACY_CASES, LIVE_CASES, MEDIA_CASES } from "./cases/index";
+import { buildRealClient, cleanupOrThrow, runCaseRepeated, type RunOptions } from "./harness";
 import { CONTRACTS } from "./media-fixtures";
 import { copyMeter, diffMeter, emptyMeter, meteredClient, pacedClient, type Meter } from "./meter";
 import { aggregate, normalize, type CaseReport, type Report } from "./report";
@@ -92,9 +92,24 @@ function liveConfigured(): boolean {
 
 /**
  * A real library, built the way the application builds one: a media connection
- * record in the (in-memory) store, resolved by `resolveSources`. The server
- * address, token and the library's key never appear here in a form that could be
- * printed; they are read from the environment by the resolver.
+ * record in the store, resolved by `resolveSources`. The server address, token
+ * and the library's key never appear here in a form that could be printed;
+ * they are read from the environment by the resolver.
+ *
+ * The record is DELETED again before this function returns, in a `finally` so
+ * it happens on a thrown error too. It only ever needs to exist for the
+ * instant `resolveSources` reads it above — the returned `search` closure is
+ * self-contained (`searchFor` captures `doc`/`env` directly, see
+ * lib/services/document-search.ts) and never re-reads the store on a later
+ * call. Previously nothing deleted this row: with `METADATA_DRIVER=postgres`
+ * (not the in-memory default) every repeat of every live/known-answer case
+ * left one real, permanent, orphaned row behind under a unique
+ * `ten_eval_live_<timestamp>` tenant — 30 of them accumulated from a single
+ * afternoon's testing this phase, found and cleaned up by hand. This is the
+ * fix, not a one-off cleanup. `cleanupOrThrow` (evals/harness.ts) throws if
+ * the delete itself fails, rather than logging and letting the case appear
+ * to have run cleanly — a cleanup that cannot be confirmed must fail the
+ * run, not hide behind it.
  */
 async function liveLibrary(spec: LiveLibrary, log: SearchRecord[]): Promise<AgentLibrary> {
   const tenantId = `ten_eval_live_${Date.now()}`;
@@ -114,26 +129,30 @@ async function liveLibrary(spec: LiveLibrary, log: SearchRecord[]): Promise<Agen
     updated_at: now,
   };
   await stores().documents.put("connections", tenantId, doc);
-  const { libraries } = await resolveSources(
-    { tenantId, userId: "usr_eval" },
-    {
-      env: {
-        MEDIA_CONNECTIONS_ENABLED: "true",
-        RETRIEVAL_BASE_URL: process.env.RETRIEVAL_BASE_URL,
-        RETRIEVAL_TOKEN: process.env.RETRIEVAL_TOKEN,
+  try {
+    const { libraries } = await resolveSources(
+      { tenantId, userId: "usr_eval" },
+      {
+        env: {
+          MEDIA_CONNECTIONS_ENABLED: "true",
+          RETRIEVAL_BASE_URL: process.env.RETRIEVAL_BASE_URL,
+          RETRIEVAL_TOKEN: process.env.RETRIEVAL_TOKEN,
+        },
+      }
+    );
+    const library = libraries[0];
+    if (!library) throw new Error("The live library did not resolve.");
+    return {
+      ...library,
+      search: async (query: string) => {
+        const result = await library.search(query);
+        log.push({ library: library.name, query, returned: result.passages.map((passage) => passage.source) });
+        return result;
       },
-    }
-  );
-  const library = libraries[0];
-  if (!library) throw new Error("The live library did not resolve.");
-  return {
-    ...library,
-    search: async (query: string) => {
-      const result = await library.search(query);
-      log.push({ library: library.name, query, returned: result.passages.map((passage) => passage.source) });
-      return result;
-    },
-  };
+    };
+  } finally {
+    await cleanupOrThrow(() => stores().documents.delete("connections", tenantId, doc.id), tenantId);
+  }
 }
 
 const VARIANTS = ["no-database", "only-relevant-library", "no-library"] as const;
@@ -176,14 +195,17 @@ async function main() {
     ...(suites.includes("media") ? MEDIA_CASES : []),
   ];
   if (suites.includes("live")) {
-    if (liveConfigured()) selected = [...selected, ...LIVE_CASES];
+    // The known-answer cases need the same three RETRIEVAL_* settings as
+    // LIVE_CASES and run under the same --suite=live flag rather than a new
+    // one — they are a small subset of "live", not a separate concern.
+    if (liveConfigured()) selected = [...selected, ...LIVE_CASES, ...KNOWN_ANSWER_CASES];
     else console.log("Skipping the live cases: RETRIEVAL_BASE_URL, RETRIEVAL_TOKEN and RETRIEVAL_TEST_TENANT are not all set.\n");
   }
   const filtered = caseFilter ? selected.filter((c) => caseFilter.some((f) => c.id.includes(f))) : selected;
   const cases = variant ? filtered.map((c) => withVariant(c, variant)) : filtered;
 
   if (cases.length === 0) {
-    console.error(`No case matches. Known ids: ${[...ALL_CASES, ...LIVE_CASES].map((c) => c.id).join(", ")}`);
+    console.error(`No case matches. Known ids: ${[...ALL_CASES, ...LIVE_CASES, ...KNOWN_ANSWER_CASES].map((c) => c.id).join(", ")}`);
     process.exit(1);
   }
 

@@ -35,6 +35,30 @@ import type {
 } from "./types";
 
 /**
+ * Runs `deleteFn` (removing the ephemeral eval connection a live case's
+ * `liveLibrary` created) and THROWS if it fails, instead of logging and
+ * continuing.
+ *
+ * The failure mode this replaces: a `liveLibrary` whose cleanup step only
+ * logged an error left the case looking like it had succeeded normally,
+ * while a real row stayed behind in the store — exactly the kind of silent
+ * accumulation that let 30 stray rows build up before anyone noticed. Called
+ * from a `finally` block, so a throw here discards whatever the `try` block
+ * was about to return and replaces it with this error — the case run then
+ * fails visibly, which is the point: a case whose cleanup could not be
+ * confirmed must not be reported as if it had run cleanly.
+ */
+export async function cleanupOrThrow(deleteFn: () => Promise<unknown>, contextLabel: string): Promise<void> {
+  try {
+    await deleteFn();
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    console.error(`[cleanup] failed to delete ${contextLabel} — this run will fail rather than hide it`, error);
+    throw new Error(`Cleanup failed for ${contextLabel}; the ephemeral eval connection may still be in the store: ${message}`);
+  }
+}
+
+/**
  * The real client configured for this environment, or a clear failure.
  *
  * `environmentClient()` returns null for several distinct reasons (no preset,

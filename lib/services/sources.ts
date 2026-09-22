@@ -104,3 +104,22 @@ async function resolveLibraries(tenantId: string, env: Env): Promise<AgentLibrar
       search: searchFor(connection, env),
     }));
 }
+
+/**
+ * The same check `resolveLibraries` makes, without building the full
+ * `AgentLibrary` objects (no `searchFor` closures constructed) and without
+ * touching SQL connections at all — `resolveSources` also introspects every
+ * database's schema, which a caller that only needs "is there anything to
+ * offer this workspace's chat UI" should not pay for or depend on.
+ *
+ * Not an authorization decision on its own: it answers "does an enabled
+ * library exist", never "is it actually searchable" (the syslab-side alias
+ * link and the deployment flag are two more, separate conditions — see
+ * `docs/ui/document-libraries.md`). Callers must not describe a `true` result
+ * as anything stronger than "enabled".
+ */
+export async function hasEnabledLibrary(tenantId: string, env: Env): Promise<boolean> {
+  if (!mediaConnectionsEnabled(env)) return false;
+  const connections = await listMediaConnections(tenantId);
+  return connections.some((connection) => isMediaConnectionActive(connection, env));
+}

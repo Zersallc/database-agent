@@ -18,6 +18,7 @@ import { mediaUnauthorizedCases } from "./media-unauthorized.eval";
 import { mediaEfficiencyCases } from "./media-efficiency.eval";
 import { mediaVagueCases } from "./media-vague.eval";
 import { mediaLiveCases } from "./media-live.eval";
+import { mediaKnownAnswerCases } from "./media-known-answer.eval";
 import type { EvalCase } from "../types";
 
 /**
@@ -58,6 +59,15 @@ export const MEDIA_CASES: EvalCase[] = [
 
 /** Cases against a real syslab-server tenant. Need RETRIEVAL_* in the environment. */
 export const LIVE_CASES: EvalCase[] = mediaLiveCases;
+
+/**
+ * The known-answer set: a small, repeatable subset of LIVE_CASES with real,
+ * checkable ground truth (golden.json plus one human-verified document-scoped
+ * fact), rather than only "did it search". Needs the same RETRIEVAL_* as
+ * every other live case, run separately from it so a full `--family=live`
+ * run is unaffected by this addition.
+ */
+export const KNOWN_ANSWER_CASES: EvalCase[] = mediaKnownAnswerCases;
 
 /** Everything that runs without a syslab-server. What `npm run eval` runs. */
 export const ALL_CASES: EvalCase[] = [...LEGACY_CASES, ...MEDIA_CASES];
