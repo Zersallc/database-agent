@@ -51,6 +51,8 @@ type ChatState = {
   error: string | null;
   connections: StoreConnection[];
   conversations: StoreConversation[];
+  /** An enabled document library exists for this workspace — not a claim that it's linked or searchable. See hasEnabledLibrary in lib/services/sources.ts. */
+  hasEnabledLibrary: boolean;
   activeConversationId: string | null;
   activeConnectionId: string | null;
   messagesByConversation: Record<string, StoreMessage[]>;
@@ -62,6 +64,7 @@ const EMPTY_STATE: ChatState = {
   error: null,
   connections: [],
   conversations: [],
+  hasEnabledLibrary: false,
   activeConversationId: null,
   activeConnectionId: null,
   messagesByConversation: {},
@@ -146,11 +149,50 @@ function fromMessageDoc(doc: {
   };
 }
 
+/**
+ * Whether this workspace has an enabled document library, from `/api/v1/me`.
+ * Fetched separately from `connections`/`conversations` (a different
+ * endpoint, a different concern) but folded into the same `Promise.all` and
+ * given its own failure handling, so one flaky call can't take down loading
+ * connections and conversations, which already worked before this existed.
+ * Defaults to `false` on any failure — the safe direction, since a `true`
+ * this store never actually confirmed would unlock chat for a workspace that
+ * may not really have a library.
+ */
+async function fetchHasEnabledLibrary(): Promise<boolean> {
+  try {
+    const res = await fetch("/api/v1/me");
+    if (!res.ok) return false;
+    const body = await res.json();
+    return body.has_enabled_library === true;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Whether `bootstrap` should create a first conversation for this workspace —
+ * exactly the decision that used to check `connections.length > 0` alone,
+ * which silently stranded a media-only workspace with no conversation to
+ * send into (Send is a no-op with no real conversation id; see `send` in
+ * ChatWorkspace). Extracted as a pure function so this specific bug class is
+ * directly testable, not just re-read by eye.
+ */
+export function shouldAutoCreateConversation(input: {
+  activeConversationId: string | null;
+  connectionsCount: number;
+  hasEnabledLibrary: boolean;
+}): boolean {
+  if (input.activeConversationId) return false;
+  return input.connectionsCount > 0 || input.hasEnabledLibrary;
+}
+
 async function bootstrap(): Promise<void> {
   try {
-    const [connectionsRes, conversationsRes] = await Promise.all([
+    const [connectionsRes, conversationsRes, hasEnabledLibrary] = await Promise.all([
       fetch("/api/v1/connections?limit=50"),
       fetch("/api/v1/conversations?limit=50"),
+      fetchHasEnabledLibrary(),
     ]);
     const connectionsBody = await readJsonOrThrow(connectionsRes, "Failed to load connections.");
     const conversationsBody = await readJsonOrThrow(conversationsRes, "Failed to load conversations.");
@@ -168,6 +210,7 @@ async function bootstrap(): Promise<void> {
       error: null,
       connections,
       conversations,
+      hasEnabledLibrary,
       activeConversationId,
       activeConnectionId: conversations[0]?.connectionId ?? connections[0]?.id ?? null,
     });
@@ -175,7 +218,8 @@ async function bootstrap(): Promise<void> {
     // A brand-new workspace (or one where every chat was deleted) has zero
     // conversations — there must always be one to send the first message into.
     if (activeConversationId) void ensureMessagesLoaded(activeConversationId);
-    else if (connections.length > 0) await newConversation();
+    else if (shouldAutoCreateConversation({ activeConversationId, connectionsCount: connections.length, hasEnabledLibrary }))
+      await newConversation();
   } catch (error) {
     setState({
       loading: false,
@@ -341,6 +385,7 @@ export function useWorkspace() {
     error: chat.error,
     conversations: chat.conversations,
     connections: chat.connections,
+    hasEnabledLibrary: chat.hasEnabledLibrary,
     activeConversationId: chat.activeConversationId,
     activeConversation,
     activeConnection,

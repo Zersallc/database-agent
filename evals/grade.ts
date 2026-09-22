@@ -3,7 +3,7 @@
  * call of their own. Reserve `judge.ts` for properties these can't check.
  */
 
-import type { EvalOutcome, GradeResult } from "./types";
+import type { EvalOutcome, FailureCategory, GradeResult, SourceExpectation, SourceRef } from "./types";
 
 export function usedConnection(outcome: EvalOutcome, name: string): GradeResult {
   const pass = outcome.executedSql.some((q) => q.connection === name);
@@ -104,12 +104,20 @@ export function retypesRows(
   };
 }
 
-/** ANDs several grades together; the reason names every failing one. */
+/** The failed checks inside a grade, each with a kind. A grade that never said is an `answer` failure. */
+export function failuresOf(grade: GradeResult): { category: FailureCategory; reason: string }[] {
+  if (grade.pass) return [];
+  if (grade.failures?.length) return grade.failures;
+  return [{ category: grade.category ?? "answer", reason: grade.reason }];
+}
+
+/** ANDs several grades together; the reason names every failing one and the failures keep their kinds. */
 export function allOf(...grades: GradeResult[]): GradeResult {
   const failed = grades.filter((g) => !g.pass);
   return {
     pass: failed.length === 0,
     reason: failed.length === 0 ? "all checks passed" : failed.map((g) => g.reason).join("; "),
+    ...(failed.length > 0 ? { failures: failed.flatMap(failuresOf) } : {}),
   };
 }
 
@@ -126,6 +134,7 @@ export function anyOf(...grades: GradeResult[]): GradeResult {
   return {
     pass: Boolean(passed),
     reason: passed ? passed.reason : `none of the accepted answers: ${grades.map((g) => g.reason).join("; ")}`,
+    ...(passed ? {} : { failures: grades.flatMap(failuresOf) }),
   };
 }
 

@@ -139,3 +139,65 @@ describe("RetrievalClient", () => {
     await assert.rejects(() => client.retrieve("q", "tenant-1"), RetrievalError);
   });
 });
+
+describe("RetrievalError.kind: what went wrong, without reading the message", () => {
+  async function kindOf(work: () => Promise<unknown>) {
+    try {
+      await work();
+    } catch (error) {
+      assert.ok(error instanceof RetrievalError, `expected a RetrievalError, got ${String(error)}`);
+      return { kind: error.kind, status: error.status };
+    }
+    assert.fail("expected the call to fail");
+  }
+
+  test("a missing base URL or token is a config error", async () => {
+    for (const config of [{ baseUrl: "", token: "t" }, { baseUrl: "http://x", token: "" }]) {
+      assert.equal((await kindOf(async () => new RetrievalClient(config))).kind, "config");
+    }
+  });
+
+  test("a non-2xx response is http, and keeps its status", async () => {
+    mockFetch(() => jsonResponse({ detail: "nope" }, 404));
+    const client = new RetrievalClient({ baseUrl: "http://host", token: "t" });
+    assert.deepEqual(await kindOf(() => client.retrieve("q", "k")), { kind: "http", status: 404 });
+  });
+
+  test("a connection failure is unreachable", async () => {
+    mockFetch(() => {
+      throw new TypeError("fetch failed");
+    });
+    const client = new RetrievalClient({ baseUrl: "http://host", token: "t" });
+    assert.deepEqual(await kindOf(() => client.retrieve("q", "k")), { kind: "unreachable", status: undefined });
+  });
+
+  test("an abort is a timeout", async () => {
+    mockFetch(() => {
+      throw Object.assign(new Error("aborted"), { name: "AbortError" });
+    });
+    const client = new RetrievalClient({ baseUrl: "http://host", token: "t" });
+    assert.deepEqual(await kindOf(() => client.retrieve("q", "k")), { kind: "timeout", status: undefined });
+  });
+
+  test("a reply that is not JSON is malformed", async () => {
+    mockFetch(() => new Response("<html>", { status: 200 }));
+    const client = new RetrievalClient({ baseUrl: "http://host", token: "t" });
+    assert.deepEqual(await kindOf(() => client.retrieve("q", "k")), { kind: "malformed", status: 200 });
+  });
+
+  test("an error built without a kind is unreachable when it has no status and http when it has one", () => {
+    assert.equal(new RetrievalError("x", undefined).kind, "unreachable");
+    assert.equal(new RetrievalError("x", 500).kind, "http");
+  });
+
+  test("the key it is given is what it sends, whatever it looks like", async () => {
+    let sent: Record<string, string> = {};
+    mockFetch((_url, init) => {
+      sent = init.headers as Record<string, string>;
+      return jsonResponse(FAKE_RESULT);
+    });
+    const client = new RetrievalClient({ baseUrl: "http://host", token: "t" });
+    await client.retrieve("q", "conn_01M31G9PSWYVQH933D76HYSYYV");
+    assert.equal(sent["X-Syslab-Tenant"], "conn_01M31G9PSWYVQH933D76HYSYYV");
+  });
+});

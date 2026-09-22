@@ -9,6 +9,8 @@
  */
 
 import type { SchemaColumn, SchemaTable } from "@/lib/connectors";
+import { sanitizeDescription } from "./libraries";
+import { databaseSourceLine } from "./provenance";
 
 export type ResponseDetail = "concise" | "balanced" | "detailed";
 
@@ -300,7 +302,16 @@ export function renderSchema(tables: SchemaTable[], engine: string): string {
   return `## Database schema\n\n${rendered}`;
 }
 
-export type PromptConnection = { name: string; engine: string; schema: SchemaTable[] | null };
+export type PromptConnection = {
+  name: string;
+  engine: string;
+  schema: SchemaTable[] | null;
+  /** What this database holds, in an administrator's words. Absent leaves the prompt as it was. */
+  description?: string | null;
+};
+
+/** A document library the agent may search. Name and description only: nothing here says where it lives. */
+export type PromptLibrary = { name: string; description: string | null };
 
 export type PromptInput = {
   /** The tenant's playbook: system prompt plus enabled skills, already assembled. */
@@ -310,10 +321,125 @@ export type PromptInput = {
   connections: PromptConnection[];
   /** Wall-clock date to ground relative and year-omitted dates in. See `renderCurrentDate`. */
   now: Date;
+  /**
+   * The document libraries offered this run, each of which `search_documents`
+   * can search. Absent or empty leaves the prompt exactly as it was, byte for
+   * byte, so a workspace with databases only is unchanged: the eval baseline
+   * describes that prompt, and `tests/prompt-document-search.test.ts` pins it.
+   */
+  libraries?: PromptLibrary[];
 };
 
-function renderConnectionIntro(connections: PromptConnection[]): string {
+/**
+ * Without this the prompt says nothing about documents, and a model told to
+ * treat the schema as the authority answers a question about a contract clause
+ * with "the schema does not include this" instead of calling the tool it was
+ * given — measured against the real prompt: offering `search_documents` alone
+ * changed nothing until a section like this existed.
+ *
+ * Names and descriptions are an administrator's words, so they are shown as
+ * data: each name is quoted, and each description is reduced to one line of
+ * plain text by `sanitizeDescription` before it is placed here.
+ */
+function renderLibraries(libraries: PromptLibrary[]): string {
+  const many = libraries.length > 1;
+  const lines = libraries.map((library) => {
+    const description = sanitizeDescription(library.description);
+    return `- ${JSON.stringify(library.name.trim())}${description ? `: ${description}` : ""}`;
+  });
+  return (
+    "## Document libraries\n\n" +
+    `This workspace has ${many ? "document libraries" : "a document library"} that you search with the ` +
+    "search_documents tool. They hold documents such as contracts, policies and reports. The database schema " +
+    "does not describe them, so the rule above about the schema being the authority applies to the databases " +
+    "only, not to what a document says: a clause, term, obligation or policy.\n\n" +
+    `${many ? "Libraries" : "Library"}:\n${lines.join("\n")}\n\n` +
+    (many ? 'Say which one with "library" when you call search_documents. ' : "") +
+    "You can search a library's contents but you cannot list its files: if asked what one holds, describe it " +
+    "from the text above and offer to search for a topic. A request to see, find or bring back something from " +
+    "the documents is a search: call search_documents with the most relevant words of the request instead of " +
+    "asking for more detail first. Answer from the passages it returns and name the source file. If nothing " +
+    "relevant comes back, say the documents do not cover it."
+  );
+}
+
+/**
+ * The routing policy, in the model's terms. It is advice about a reasoning
+ * decision (which tool the question needs) and nothing more: which database or
+ * library a call reaches, and whether the user may use it, are decided by the
+ * application before the model sees any of this.
+ *
+ * Only present when there is something to choose between, so a workspace with
+ * one source is not asked to weigh anything.
+ */
+function renderSourceChoice(databaseCount: number): string {
+  return (
+    "## Choosing a source\n\n" +
+    (databaseCount > 0 ? "Databases hold rows and figures; document libraries hold what documents say. " : "") +
+    "Decide which source the question needs." +
+    (databaseCount > 1 ? " Choosing between databases follows the Databases section below." : "") +
+    "\n" +
+    "1. If the likely source is reasonably clear and a wrong first choice would cost little, use it straight " +
+    "away. Do not ask which source to use.\n" +
+    "2. If that source does not answer the question and the question plausibly needs another one (its wording, " +
+    "or what the source is described as holding, points there), use or offer the other source. Do not query a " +
+    "second source only because the first answer was incomplete, or to double-check an answer you already have.\n" +
+    "3. If it is unclear which source holds the answer and a wrong choice would change a figure, a legal, " +
+    "financial or compliance conclusion, or something someone will do, ask one short clarifying question " +
+    "before querying anything.\n" +
+    "4. Say which source your answer came from."
+  );
+}
+
+/**
+ * How to close an answer that used documents.
+ *
+ * The model writes the block; the application decides what is in it. Each line
+ * is checked against what this run actually retrieved and queried, and a line
+ * the run cannot back is removed (see lib/agent/provenance.ts), so this asks
+ * for a list the model can produce honestly rather than one it must trust
+ * itself about. The database lines are given whole, from the same function the
+ * check uses, so the model copies them instead of composing them.
+ *
+ * Only present when there are libraries: a workspace with databases only has
+ * nothing to cite beyond the queries the reader can already see.
+ *
+ * The block is asked for as what follows a search, not as a rule about answers
+ * that "use what a document says". That wording made the model weigh whether
+ * its answer would use a document before it had looked, and it sometimes
+ * settled the question by saying the documents did not cover it without
+ * searching. Compared against the real model with the section left out, that
+ * wording searched in 46 of 58 informal runs against 53 of 53; this one
+ * searched in 24 of 24, and the model wrote the block itself in all of them.
+ * See tests/agent-provenance.test.ts, which pins the framing.
+ */
+function renderSources(connections: PromptConnection[], libraries: PromptLibrary[]): string {
+  const databaseLines = connections.map((c) => databaseSourceLine(c.engine, c.name));
+  return (
+    "## Sources\n\n" +
+    "After search_documents returns passages, finish your answer with a Sources block: the line \"Sources:\" and " +
+    "then one line for each source you relied on. Nothing else goes in the block and nothing comes after it.\n\n" +
+    "- A document is its file name exactly as search_documents returned it" +
+    (libraries.length > 1 ? ", followed by its library in parentheses: file name (library name)" : "") +
+    ".\n" +
+    (databaseLines.length > 0
+      ? `- A database is written exactly as ${databaseLines.map((line) => JSON.stringify(line)).join(" or ")}; ` +
+        "include one only if you queried it for this answer.\n"
+      : "") +
+    "\nList only files a search returned and databases you actually queried; a line that cannot be confirmed is removed."
+  );
+}
+
+/** A database's description as one plain line, or nothing. */
+function holds(connection: PromptConnection): string | null {
+  return sanitizeDescription(connection.description);
+}
+
+function renderConnectionIntro(connections: PromptConnection[], hasLibraries = false): string {
   if (connections.length === 0) {
+    if (hasLibraries) {
+      return "## Connection\n\nNo database is attached to this conversation, so you cannot run queries. Answer from the document libraries above, and say plainly if a question needs figures from a database.";
+    }
     return "## Connection\n\nNo database is attached to this conversation. You cannot run queries. Say so and explain that a connection needs to be selected.";
   }
 
@@ -324,18 +450,23 @@ function renderConnectionIntro(connections: PromptConnection[]): string {
       `"${c.name}" is this connection's label for humans — it is not a schema, catalog, or anything else ` +
       `writable in SQL. Reference tables using exactly the schema-qualified names shown in the Database ` +
       `schema section below, nothing prepended.` +
+      (holds(c) ? `\n\n"${c.name}" holds: ${holds(c)}` : "") +
       (c.engine === "demo"
         ? "\n\nThis is the built-in sample dataset, not real data. Say so in your answer so nobody acts on these numbers."
         : "")
     );
   }
 
+  const described = connections.filter((c) => holds(c));
   return (
     `## Databases\n\nThis workspace has ${connections.length} databases: ${connections.map((c) => c.name).join(", ")}. ` +
     `Identify which one is relevant to the question from the schemas below, and pass its exact name as ` +
     `"database" when calling run_sql — that name only selects the connection for the tool call and is ` +
     `never part of the SQL text itself. Reference tables in SQL using exactly the schema-qualified names ` +
-    `shown under each database's schema below. If more than one could plausibly answer it, ask rather than guessing.`
+    `shown under each database's schema below. If more than one could plausibly answer it, ask rather than guessing.` +
+    (described.length > 0
+      ? `\n\nWhat each holds:\n${described.map((c) => `- "${c.name}": ${holds(c)}`).join("\n")}`
+      : "")
   );
 }
 
@@ -358,12 +489,20 @@ function renderSchemas(connections: PromptConnection[]): string | null {
 }
 
 export function buildSystemPrompt(input: PromptInput): string {
+  const libraries = input.libraries ?? [];
   const sections = [
     CORE_BEHAVIOR,
+    // Nothing about libraries is rendered for a workspace that has none, so a
+    // database-only prompt is exactly what it was before libraries existed.
+    ...(libraries.length > 0 ? [renderLibraries(libraries)] : []),
+    ...(libraries.length > 0 && input.connections.length + libraries.length > 1
+      ? [renderSourceChoice(input.connections.length)]
+      : []),
+    ...(libraries.length > 0 ? [renderSources(input.connections, libraries)] : []),
     OUTPUT_FORMAT,
     DETAIL_GUIDANCE[input.responseDetail],
     renderCurrentDate(input.now),
-    renderConnectionIntro(input.connections),
+    renderConnectionIntro(input.connections, libraries.length > 0),
   ];
 
   if (input.playbookContext.trim()) {

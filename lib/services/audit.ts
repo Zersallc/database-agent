@@ -19,6 +19,9 @@ export type AuditAction =
   | "user.deleted"
   | "connection.created"
   | "connection.deleted"
+  | "media_connection.created"
+  | "media_connection.updated"
+  | "media_connection.deleted"
   | "data_access.updated";
 
 export async function recordAuditEvent(params: {

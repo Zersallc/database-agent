@@ -1,5 +1,6 @@
 import { defineRoute } from "@/lib/api/handler";
 import { prisma } from "@/lib/db";
+import { hasEnabledLibrary } from "@/lib/services/sources";
 
 export const runtime = "nodejs";
 
@@ -17,13 +18,15 @@ export const GET = defineRoute({
   handler: async ({ principal }) => {
     // `apiKeyId` is only set for a Bearer-token caller — a signed-in browser
     // has a real `userId` pointing at a Prisma row worth looking up.
-    const user =
+    const [user, hasLibrary] = await Promise.all([
       principal.apiKeyId === null
-        ? await prisma.user.findUnique({
+        ? prisma.user.findUnique({
             where: { id: principal.userId },
             include: { company: true },
           })
-        : null;
+        : Promise.resolve(null),
+      hasEnabledLibrary(principal.tenantId, process.env),
+    ]);
 
     return {
       body: {
@@ -32,6 +35,10 @@ export const GET = defineRoute({
         role: principal.role,
         scopes: principal.scopes,
         api_key_id: principal.apiKeyId,
+        // "Enabled", not "linked" or "searchable" — see hasEnabledLibrary's
+        // own doc comment. A caller must not read `true` as a guarantee that
+        // search actually works.
+        has_enabled_library: hasLibrary,
         profile: user
           ? {
               name: user.name,

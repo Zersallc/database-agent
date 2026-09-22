@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useState } from "react";
+import { useSession } from "next-auth/react";
 import { toast } from "sonner";
 import { DatabaseIcon, PencilIcon, PlusIcon, RefreshCwIcon, Trash2Icon, ZapIcon } from "lucide-react";
 import { DataAccessDialog } from "@/components/companies/DataAccessDialog";
@@ -38,6 +39,9 @@ import {
 } from "@/components/ui/select";
 import { Switch } from "@/components/ui/switch";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { DocumentLibrariesSection } from "./DocumentLibrariesSection";
+import { canManageDocumentLibraries } from "./media-connection-form";
 
 type SchemaColumn = {
   name: string;
@@ -121,6 +125,12 @@ const FILTER_CONFIG: FilterConfig<Row>[] = [
 ];
 
 export function DatabaseMappingPage() {
+  const { data: session } = useSession();
+  // Presentation only. Every media route re-checks the role server-side with
+  // `requireDeveloperRole`; an Admin who reaches this page (it is admin-gated,
+  // not developer-gated) simply is not shown a tab they would be refused.
+  const showDocumentLibraries = canManageDocumentLibraries(session?.user?.role);
+
   const [apiRows, setApiRows] = useState<ApiRow[]>([]);
   const [companies, setCompanies] = useState<Company[]>([]);
   const [loading, setLoading] = useState(true);
@@ -495,40 +505,64 @@ export function DatabaseMappingPage() {
 
   return (
     <div className="space-y-4 p-6">
-      <div className="flex items-center justify-between">
-        <div className="flex items-center gap-2">
-          <DatabaseIcon className="size-5 text-muted-foreground" />
-          <h1 className="text-lg font-semibold">Database Mapping</h1>
-        </div>
-        <Button size="sm" className="gap-1.5" onClick={openAdd}>
-          <PlusIcon className="size-3.5" />
-          Add database
-        </Button>
+      <div className="flex items-center gap-2">
+        <DatabaseIcon className="size-5 text-muted-foreground" />
+        <h1 className="text-lg font-semibold">Database Mapping</h1>
       </div>
-      <p className="-mt-2 text-sm text-muted-foreground">
-        Every table in every registered database, one row each, and which company can see it.
-        Access is enforced by a dedicated Postgres role per company, not an app-level filter.
-      </p>
 
-      <FilterBar
-        data={rows}
-        filterConfig={FILTER_CONFIG}
-        search={filters.search}
-        onSearchChange={filters.setSearch}
-        activeFilters={filters.activeFilters}
-        onFilterChange={filters.setFilterValues}
-        onClearFilter={filters.clearFilter}
-        searchPlaceholder="Search tables…"
-      />
+      <Tabs defaultValue="databases">
+        <div className="-mx-1 overflow-x-auto px-1">
+          <TabsList>
+            <TabsTrigger value="databases">Databases</TabsTrigger>
+            {showDocumentLibraries && (
+              <TabsTrigger value="document-libraries">Document libraries</TabsTrigger>
+            )}
+          </TabsList>
+        </div>
 
-      <DataTable
-        data={filters.filtered}
-        columns={columns}
-        loading={loading}
-        getRowId={(row) => `${row.connection.id}::${row.table_name}`}
-        exportFileName="database-mapping"
-        emptyMessage="No databases registered yet."
-      />
+        <TabsContent value="databases" className="mt-4 space-y-4">
+          <div className="flex items-start justify-between gap-3">
+            <p className="text-sm text-muted-foreground">
+              Every table in every registered database, one row each, and which company can see it.
+              Access is enforced by a dedicated Postgres role per company, not an app-level filter.
+            </p>
+            <Button size="sm" className="shrink-0 gap-1.5" onClick={openAdd}>
+              <PlusIcon className="size-3.5" />
+              Add database
+            </Button>
+          </div>
+
+          <FilterBar
+            data={rows}
+            filterConfig={FILTER_CONFIG}
+            search={filters.search}
+            onSearchChange={filters.setSearch}
+            activeFilters={filters.activeFilters}
+            onFilterChange={filters.setFilterValues}
+            onClearFilter={filters.clearFilter}
+            searchPlaceholder="Search tables…"
+          />
+
+          <DataTable
+            data={filters.filtered}
+            columns={columns}
+            loading={loading}
+            getRowId={(row) => `${row.connection.id}::${row.table_name}`}
+            exportFileName="database-mapping"
+            emptyMessage="No databases registered yet."
+          />
+        </TabsContent>
+
+        {/* Document libraries are a different kind of source: no credentials,
+            no tables, no SQL test. They share this page because both answer
+            "what can this company's agent read", but nothing above is reused
+            below — the SQL controls stay database-only on purpose. */}
+        {showDocumentLibraries && (
+          <TabsContent value="document-libraries" className="mt-4">
+            <DocumentLibrariesSection companies={companies} />
+          </TabsContent>
+        )}
+      </Tabs>
 
       {dataAccessTarget && (
         <DataAccessDialog

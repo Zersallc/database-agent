@@ -33,6 +33,14 @@ import {
   vouchedFrom,
   withoutLiterals,
 } from "./evidence";
+import {
+  SEARCH_DOCUMENTS_TOOL_NAME,
+  buildSearchDocumentsTool,
+  describeSearchFailure,
+  resolveLibrary,
+  type AgentLibrary,
+} from "./libraries";
+import { ProvenanceLedger, checkSources, sourcesCorrection } from "./provenance";
 import { buildSystemPrompt, type ResponseDetail } from "./prompt";
 import { ModelProviderError } from "./providers";
 import type { ModelClient, ModelMessage, ModelTurn, ToolDefinition } from "./providers";
@@ -408,6 +416,8 @@ export type AgentConnection = {
   name: string;
   engine: string;
   schema: SchemaTable[] | null;
+  /** What this database holds, in an administrator's words. Optional; shown in the prompt as data. */
+  description?: string | null;
   /**
    * Runs SQL and persists it. Owned by the caller so connector lifecycle and
    * query records stay in the service layer, where the transaction boundaries
@@ -416,19 +426,7 @@ export type AgentConnection = {
   execute: (sql: string) => Promise<{ queryId: string; result: QueryResult }>;
 };
 
-/**
- * Lets the agent search this workspace's documents via syslab-server's
- * retrieval plane. Null means no retrieval endpoint is configured for this
- * deployment — the agent still works with run_sql/generate_esg_report alone,
- * the same way a workspace with no report data omits `reportGenerator`.
- */
-export type DocumentSearch = {
-  search: (query: string) => Promise<{
-    passages: { source: string; text: string; found_by: string[] }[];
-    coverage: { searched: number; matched: number; returned: number };
-    what_this_means: string;
-  }>;
-};
+export type { AgentLibrary, DocumentSearchResult } from "./libraries";
 
 /** Lets the agent produce a downloadable Monthly/Annual ESG/GHG report on request. */
 export type ReportGenerator = {
@@ -471,13 +469,16 @@ export type AgentRunInput = {
   /** Null when report generation isn't wired for this run (no hospital data connected). */
   reportGenerator: ReportGenerator | null;
   /**
-   * Optional, unlike reportGenerator: absent (or null) means no syslab-server
-   * retrieval endpoint is configured for this deployment. Optional rather
-   * than required so every existing caller that predates this field — the
-   * whole existing test suite — keeps compiling without having to know it
-   * exists.
+   * The document libraries this user's workspace may search, already resolved
+   * and authorized by the application. Absent or empty means `search_documents`
+   * is not offered at all. Optional rather than required so every caller that
+   * predates libraries keeps compiling without having to know they exist.
+   *
+   * Each library's `search` has its server, key and credentials sealed inside
+   * it, so the model can name a library and supply a question and can do
+   * nothing else: see lib/agent/libraries.ts.
    */
-  documentSearch?: DocumentSearch | null;
+  libraries?: AgentLibrary[];
   /**
    * Wall-clock date the model should ground relative and year-omitted dates
    * in. Defaults to the real clock; overridable so a test can pin "today"
@@ -535,24 +536,6 @@ function buildRunSqlTool(connections: AgentConnection[]): ToolDefinition {
   };
 }
 
-const SEARCH_DOCUMENTS_TOOL_NAME = "search_documents";
-
-const SEARCH_DOCUMENTS_TOOL: ToolDefinition = {
-  name: SEARCH_DOCUMENTS_TOOL_NAME,
-  description:
-    "Search this workspace's ingested documents (contracts, reports, policies) for passages relevant " +
-    "to a question. Use this for questions about document content — never for questions answerable " +
-    "from the connected database, which run_sql already answers faster and more precisely.",
-  parameters: {
-    type: "object",
-    properties: {
-      query: { type: "string", description: "What to search for, in natural language." },
-    },
-    required: ["query"],
-    additionalProperties: false,
-  },
-};
-
 const GENERATE_ESG_REPORT_TOOL: ToolDefinition = {
   name: "generate_esg_report",
   description:
@@ -604,10 +587,20 @@ export async function* runAgent(input: AgentRunInput): AsyncGenerator<AgentEvent
     return;
   }
 
+  // What this run may search, fixed by the caller before the model is asked
+  // anything. Every later decision about libraries is made against this list.
+  const libraries = input.libraries ?? [];
+
   const system = buildSystemPrompt({
     playbookContext: input.playbookContext,
     responseDetail: input.responseDetail,
-    connections: input.connections.map((c) => ({ name: c.name, engine: c.engine, schema: c.schema })),
+    connections: input.connections.map((c) => ({
+      name: c.name,
+      engine: c.engine,
+      schema: c.schema,
+      description: c.description,
+    })),
+    libraries: libraries.map((library) => ({ name: library.name, description: library.description })),
     now: input.now ?? new Date(),
   });
 
@@ -626,7 +619,7 @@ export async function* runAgent(input: AgentRunInput): AsyncGenerator<AgentEvent
   const tools = [
     ...(input.connections.length > 0 ? [buildRunSqlTool(input.connections)] : []),
     ...(input.reportGenerator ? [GENERATE_ESG_REPORT_TOOL] : []),
-    ...(input.documentSearch ? [SEARCH_DOCUMENTS_TOOL] : []),
+    ...(libraries.length > 0 ? [buildSearchDocumentsTool(libraries)] : []),
   ];
   let answer = "";
   let reasoning = "";
@@ -637,6 +630,15 @@ export async function* runAgent(input: AgentRunInput): AsyncGenerator<AgentEvent
   let toolCallsMade = 0;
   let forcedRetryUsed = false;
   let toolChoice: "auto" | "required" = "auto";
+  /**
+   * What this run really did as far as sources go: databases that returned a
+   * successful query and (library, file) pairs a search returned. Written only
+   * from results the loop received, never from anything the model said, and
+   * consulted when an answer closes with a Sources block. See ./provenance.
+   */
+  const ledger = new ProvenanceLedger();
+  const sourceStyle = { showLibrary: libraries.length > 1 };
+  let sourcesCorrected = false;
   /**
    * Rows the most recent successful query returned. The *last* one rather than
    * the run's total on purpose: a turn that finds rows and then asks a narrower
@@ -1064,9 +1066,42 @@ export async function* runAgent(input: AgentRunInput): AsyncGenerator<AgentEvent
           continue;
         }
 
+        /**
+         * Sources. Only in a workspace that has libraries: without them the
+         * model was never asked for a block, and what it writes is left alone.
+         *
+         * The block the model wrote is checked against the ledger and rebuilt
+         * from the lines the ledger backs. If a search returned documents and
+         * no valid block came out, that is one corrective retry, spent the
+         * same way as the ones above; after it the answer goes out as it is,
+         * without a block rather than with an unbacked one.
+         *
+         * `completed.content` is what the reader ends up with: the client
+         * replaces whatever it streamed with it, and it is what is stored.
+         */
+        let finalContent = answer.trim();
+        if (libraries.length > 0) {
+          const checked = checkSources(answer, ledger, sourceStyle);
+          if (!sourcesCorrected && ledger.retrievedDocuments > 0 && checked.kept === 0) {
+            sourcesCorrected = true;
+            yield emit({
+              label: "Answered from documents without listing sources — retrying",
+              status: "done",
+              detail: "A search returned documents, but the answer had no Sources block that could be confirmed.",
+              query_id: null,
+            });
+            messages.push({ role: "user", content: sourcesCorrection(ledger, sourceStyle) });
+            answer = "";
+            reasoning = "";
+            yield { type: "reset" };
+            continue;
+          }
+          finalContent = checked.text.trim();
+        }
+
         yield {
           type: "completed",
-          content: answer.trim(),
+          content: finalContent,
           thinking: reasoning.trim() || null,
           steps,
           model,
@@ -1090,16 +1125,23 @@ export async function* runAgent(input: AgentRunInput): AsyncGenerator<AgentEvent
 
       for (const call of turn.toolCalls) {
         if (call.name === SEARCH_DOCUMENTS_TOOL_NAME) {
-          if (!input.documentSearch) {
+          // Authorization happens here, on every call, against the list the
+          // application built. The model supplies at most a library's display
+          // name; everything else in `call.input` is ignored, so a tenant id, a
+          // key, a token or an address in it changes nothing.
+          const resolution = resolveLibrary(libraries, call.input.library);
+          if ("error" in resolution) {
             messages.push({
               role: "tool",
               toolCallId: call.id,
               toolName: call.name,
-              content: "Document search is not available in this workspace.",
+              content: resolution.error,
               isError: true,
             });
             continue;
           }
+          const { library } = resolution;
+          const where = libraries.length > 1 ? JSON.stringify(library.name.trim()) : "documents";
 
           const query = typeof call.input.query === "string" ? call.input.query.trim() : "";
           if (!query) {
@@ -1114,9 +1156,13 @@ export async function* runAgent(input: AgentRunInput): AsyncGenerator<AgentEvent
           }
 
           try {
-            const found = await input.documentSearch.search(query);
+            const found = await library.search(query);
+            ledger.recordDocuments(
+              library.name,
+              Array.isArray(found.passages) ? found.passages.map((passage) => passage.source) : []
+            );
             yield emit({
-              label: `Searched documents: ${query}`,
+              label: `Searched ${where}: ${query}`,
               status: "done",
               detail: `${found.coverage.returned} of ${found.coverage.matched} matching passages`,
               query_id: null,
@@ -1129,16 +1175,19 @@ export async function* runAgent(input: AgentRunInput): AsyncGenerator<AgentEvent
               isError: false,
             });
           } catch (error) {
-            const detail = error instanceof Error ? error.message : String(error);
+            // One fixed sentence per kind of failure, and nothing derived from
+            // the error itself: its text can hold the server's address or part
+            // of its reply, and this goes to the model and to the reader.
+            const detail = describeSearchFailure(error);
             // Never fabricate context in its place: a retrieval failure is
             // reported to the model as exactly that, so it can say retrieval
             // was unavailable rather than answer as if nothing existed to find.
-            yield emit({ label: `Searching documents: ${query}`, status: "failed", detail, query_id: null });
+            yield emit({ label: `Searching ${where}: ${query}`, status: "failed", detail, query_id: null });
             messages.push({
               role: "tool",
               toolCallId: call.id,
               toolName: call.name,
-              content: `Document search failed: ${detail}`,
+              content: `Document search failed: ${detail} Do not guess what the documents say.`,
               isError: true,
             });
           }
@@ -1260,6 +1309,7 @@ export async function* runAgent(input: AgentRunInput): AsyncGenerator<AgentEvent
 
         try {
           const { queryId, result } = await target.execute(sql);
+          ledger.recordQuery(target.engine, target.name);
           // Non-null: seeded above for every connection in input.connections,
           // and target is always drawn from that same list.
           const vouched = vouchedByConnection.get(target.id)!;
@@ -1338,7 +1388,7 @@ export async function* runAgent(input: AgentRunInput): AsyncGenerator<AgentEvent
     yield {
       type: "completed",
       content:
-        answer.trim() ||
+        (libraries.length > 0 ? checkSources(answer, ledger, sourceStyle).text.trim() : answer.trim()) ||
         "I could not finish this within the step limit. Narrowing the question usually helps.",
       thinking: reasoning.trim() || null,
       steps,
