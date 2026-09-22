@@ -16,6 +16,14 @@ type Env = Record<string, string | undefined>;
 
 export type MediaServerConfig = { baseUrl: string; token: string };
 
+/**
+ * The only `server_ref` values this deployment understands. A second
+ * syslab-server would add to this list alongside its own environment
+ * variables, not accept an arbitrary reference from whoever creates a
+ * connection — see the file header.
+ */
+export const SUPPORTED_MEDIA_SERVER_REFS = ["default"] as const;
+
 export function resolveMediaServer(serverRef: string, env: Env = process.env): MediaServerConfig | null {
   if (serverRef.trim() !== "default") return null;
   const baseUrl = env.RETRIEVAL_BASE_URL?.trim();

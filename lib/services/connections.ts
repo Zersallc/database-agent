@@ -21,6 +21,7 @@ import {
   type SchemaTable,
 } from "@/lib/connectors";
 import { stores } from "@/lib/providers";
+import { SUPPORTED_MEDIA_SERVER_REFS } from "./media-server";
 
 export type ConnectionStatus = "connected" | "degraded" | "offline" | "unknown";
 
@@ -267,6 +268,217 @@ export async function listMediaConnections(tenantId: string): Promise<MediaConne
     startAfter = { sort: last.created_at, id: last.id };
   }
   return found;
+}
+
+/** A media connection by id. A database connection's id is not found here, as if it did not exist. */
+export async function findMediaConnection(
+  tenantId: string,
+  connectionId: string
+): Promise<MediaConnectionDoc | null> {
+  const doc = await findAnyConnection(tenantId, connectionId);
+  return doc && isMediaConnection(doc) ? doc : null;
+}
+
+export async function requireMediaConnection(
+  tenantId: string,
+  connectionId: string
+): Promise<MediaConnectionDoc> {
+  const doc = await findMediaConnection(tenantId, connectionId);
+  if (!doc) throw notFound("media connection", connectionId);
+  return doc;
+}
+
+/**
+ * Case-insensitive name collision, across both kinds in this tenant's
+ * `connections` collection — the plan's rule ("names unique within a company
+ * ... across PostgreSQL and media") only holds if creating either kind checks
+ * the other. `createConnection`/`updateConnection` (database) do not call
+ * this yet, so a database connection can still collide with a media one
+ * created after it; closing that side is a follow-up, not done here, since it
+ * touches a route this phase did not otherwise need to change.
+ */
+async function connectionNameTaken(tenantId: string, name: string, excludeId?: string): Promise<boolean> {
+  const target = name.trim().toLowerCase();
+  const pageSize = 100;
+  let startAfter: { sort: string; id: string } | undefined;
+
+  for (let scanned = 0; scanned < MEDIA_SCAN_LIMIT; scanned += pageSize) {
+    const batch = await stores().documents.list<StoredConnectionDoc>("connections", tenantId, {
+      orderBy: "created_at",
+      order: "asc",
+      startAfter,
+      limit: pageSize,
+    });
+    for (const doc of batch) {
+      if (doc.id === excludeId) continue;
+      if (doc.name.trim().toLowerCase() === target) return true;
+    }
+    if (batch.length < pageSize) break;
+    const last = batch[batch.length - 1];
+    startAfter = { sort: last.created_at, id: last.id };
+  }
+  return false;
+}
+
+/**
+ * `library_ref` is a Developer-typed note, never sent to syslab-server and
+ * never read by routing, auth or the prompt (see `MediaConnectionDoc.media`
+ * above). This is a loose safety net on what gets stored, not a format any
+ * real syslab library id has to follow.
+ */
+const LIBRARY_REF_PATTERN = /^[A-Za-z0-9 ._\-:/]*$/;
+const LIBRARY_REF_MAX_CHARS = 200;
+
+function validateLibraryRef(raw: string | null | undefined): string | null {
+  if (raw === undefined || raw === null) return null;
+  const value = raw.trim();
+  if (!value) return null;
+  if (value.length > LIBRARY_REF_MAX_CHARS) {
+    throw new ApiError("invalid_request", `'library_ref' must be at most ${LIBRARY_REF_MAX_CHARS} characters.`, {
+      details: { fields: [{ path: "library_ref", issue: `must be at most ${LIBRARY_REF_MAX_CHARS} characters` }] },
+    });
+  }
+  if (!LIBRARY_REF_PATTERN.test(value)) {
+    throw new ApiError(
+      "invalid_request",
+      "'library_ref' may only contain letters, digits, spaces, and . _ - : /.",
+      { details: { fields: [{ path: "library_ref", issue: "contains a character outside the allowed safety charset" }] } }
+    );
+  }
+  return value;
+}
+
+function validateServerRef(raw: string | undefined): string {
+  const value = (raw ?? "").trim() || "default";
+  if (!SUPPORTED_MEDIA_SERVER_REFS.includes(value as (typeof SUPPORTED_MEDIA_SERVER_REFS)[number])) {
+    throw new ApiError("invalid_request", `'server_ref' must be one of: ${SUPPORTED_MEDIA_SERVER_REFS.join(", ")}.`, {
+      details: { fields: [{ path: "server_ref", issue: `must be one of: ${SUPPORTED_MEDIA_SERVER_REFS.join(", ")}` }] },
+    });
+  }
+  return value;
+}
+
+export type CreateMediaConnectionInput = {
+  name: string;
+  description?: string | null;
+  library_ref?: string | null;
+  server_ref?: string;
+  enabled?: boolean;
+};
+
+export async function createMediaConnection(
+  tenantId: string,
+  input: CreateMediaConnectionInput
+): Promise<MediaConnectionDoc> {
+  const name = input.name.trim();
+  if (!name) {
+    throw new ApiError("invalid_request", "'name' is required.", {
+      details: { fields: [{ path: "name", issue: "must not be empty" }] },
+    });
+  }
+  if (await connectionNameTaken(tenantId, name)) {
+    throw new ApiError("resource_conflict", `A connection named '${name}' already exists in this workspace.`, {
+      details: { fields: [{ path: "name", issue: "already in use by another connection, database or media" }] },
+    });
+  }
+
+  const serverRef = validateServerRef(input.server_ref);
+  const libraryRef = validateLibraryRef(input.library_ref);
+  const id = newId("connection");
+  const now = new Date().toISOString();
+
+  const doc: MediaConnectionDoc = {
+    id,
+    object: "connection",
+    kind: "media",
+    engine: "media",
+    name,
+    description: input.description?.trim() || null,
+    enabled: input.enabled ?? true,
+    status: "unknown",
+    status_checked_at: null,
+    status_detail: null,
+    // The connection's own id IS its syslab alias — unique per record for
+    // free, and deleting the connection retires exactly this alias and no
+    // other (see the plan decision quoted on MediaConnectionDoc.media).
+    // Never accepted from a caller: nothing a Developer types selects it.
+    media: { alias_id: id, library_ref: libraryRef, server_ref: serverRef },
+    created_at: now,
+    updated_at: now,
+  };
+
+  return stores().documents.put("connections", tenantId, doc);
+}
+
+export type UpdateMediaConnectionInput = {
+  name?: string;
+  description?: string | null;
+  library_ref?: string | null;
+  enabled?: boolean;
+};
+
+/** `alias_id` and `server_ref` are fixed at creation — not accepted here. */
+export async function updateMediaConnection(
+  tenantId: string,
+  connectionId: string,
+  input: UpdateMediaConnectionInput
+): Promise<MediaConnectionDoc> {
+  const existing = await requireMediaConnection(tenantId, connectionId);
+  const changes: Partial<MediaConnectionDoc> = { updated_at: new Date().toISOString() };
+
+  if (input.name !== undefined) {
+    const name = input.name.trim();
+    if (!name) {
+      throw new ApiError("invalid_request", "'name' must not be empty.", {
+        details: { fields: [{ path: "name", issue: "must not be empty" }] },
+      });
+    }
+    if (await connectionNameTaken(tenantId, name, connectionId)) {
+      throw new ApiError("resource_conflict", `A connection named '${name}' already exists in this workspace.`, {
+        details: { fields: [{ path: "name", issue: "already in use by another connection, database or media" }] },
+      });
+    }
+    changes.name = name;
+  }
+  if (input.description !== undefined) changes.description = input.description?.trim() || null;
+  if (input.library_ref !== undefined) {
+    // `patch` merges top-level fields only, so `media` is replaced whole —
+    // alias_id and server_ref must be carried forward explicitly.
+    changes.media = { ...existing.media, library_ref: validateLibraryRef(input.library_ref) };
+  }
+  if (input.enabled !== undefined) changes.enabled = input.enabled;
+
+  const updated = await stores().documents.patch<MediaConnectionDoc>(
+    "connections",
+    tenantId,
+    connectionId,
+    changes
+  );
+  return updated ?? existing;
+}
+
+export async function deleteMediaConnection(tenantId: string, connectionId: string): Promise<void> {
+  const existing = await findMediaConnection(tenantId, connectionId);
+  if (!existing) return;
+  await stores().documents.delete("connections", tenantId, connectionId);
+}
+
+/** The wire shape. `media.alias_id` never leaves the server — see `MediaConnectionDoc.media`. */
+export function serializeMediaConnection(doc: MediaConnectionDoc) {
+  return {
+    id: doc.id,
+    object: doc.object,
+    kind: doc.kind,
+    name: doc.name,
+    description: doc.description ?? null,
+    enabled: doc.enabled ?? true,
+    status: doc.status,
+    status_checked_at: doc.status_checked_at,
+    status_detail: doc.status_detail,
+    media: { library_ref: doc.media.library_ref, server_ref: doc.media.server_ref },
+    created_at: doc.created_at,
+    updated_at: doc.updated_at,
+  };
 }
 
 /** A database by id. A media connection's id is not found here, as if it did not exist. */

@@ -101,6 +101,11 @@ tags:
     description: Attachment upload and retrieval.
   - name: AI Feedback
     description: User-submitted reports about an AI response, triaged by Developers across every company.
+  - name: Media connections
+    description: |
+      Document libraries (syslab-server) as a connection type alongside
+      PostgreSQL. Developer-only and cross-company, like AI Feedback — see
+      the note on each operation.
 
 paths:
   # --------------------------------------------------------------------------
@@ -312,6 +317,156 @@ paths:
         "401": { $ref: "#/components/responses/Unauthorized" }
         "404": { $ref: "#/components/responses/NotFound" }
         "502": { $ref: "#/components/responses/UpstreamError" }
+        default: { $ref: "#/components/responses/Error" }
+
+  # --------------------------------------------------------------------------
+  # Media connections
+  # --------------------------------------------------------------------------
+  /v1/companies/{company_id}/media-connections:
+    parameters:
+      - name: company_id
+        in: path
+        required: true
+        schema: { type: string, examples: ["cmp_01HZX9K2"] }
+    get:
+      operationId: listMediaConnections
+      tags: [Media connections]
+      summary: List a company's media connections
+      description: |
+        Required scope: `connections:read`, and the caller must be signed in
+        as a Developer — an API key is rejected regardless of role, the same
+        rule AI Feedback's cross-tenant read uses. `company_id` names the
+        target workspace explicitly, because a Developer manages OTHER
+        companies' connections here, not only their own.
+
+        Not paginated: a workspace has a handful of media connections.
+        Returns every one, enabled or not — this is the management view, not
+        what an agent run may use (that filtering is `resolveSources`'s job,
+        applied separately at run time).
+      responses:
+        "200":
+          description: Every media connection in the company
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data, has_more, next_cursor]
+                properties:
+                  data:
+                    type: array
+                    items: { $ref: "#/components/schemas/MediaConnection" }
+                  has_more: { type: boolean, const: false }
+                  next_cursor: { type: "null" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        default: { $ref: "#/components/responses/Error" }
+    post:
+      operationId: createMediaConnection
+      tags: [Media connections]
+      summary: Register a media connection
+      description: |
+        Required scope: `connections:write`, Developer session only.
+
+        `media.alias_id` is assigned by the server as the new connection's own
+        id and is never accepted from the request — it is the record's syslab
+        alias (see MediaConnectionCreate). `library_ref` is a Developer-typed
+        note only: opaque, non-authoritative, never sent to syslab-server.
+        `server_ref` must be one of the deployment's known references
+        (`default` today); anything else is a `400`.
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/MediaConnectionCreate" }
+      responses:
+        "201":
+          description: Created
+          headers:
+            Location:
+              description: URL of the created media connection.
+              schema: { type: string }
+            Idempotent-Replay: { $ref: "#/components/headers/Idempotent-Replay" }
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/MediaConnection" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+        default: { $ref: "#/components/responses/Error" }
+
+  /v1/companies/{company_id}/media-connections/{connection_id}:
+    parameters:
+      - name: company_id
+        in: path
+        required: true
+        schema: { type: string, examples: ["cmp_01HZX9K2"] }
+      - name: connection_id
+        in: path
+        required: true
+        schema: { type: string, examples: ["conn_01HZX9K2"] }
+    get:
+      operationId: getMediaConnection
+      tags: [Media connections]
+      summary: Retrieve one media connection
+      description: "Required scope: `connections:read`, Developer session only."
+      responses:
+        "200":
+          description: The media connection
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/MediaConnection" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        default: { $ref: "#/components/responses/Error" }
+    patch:
+      operationId: updateMediaConnection
+      tags: [Media connections]
+      summary: Update a media connection, including enable/disable
+      description: |
+        Required scope: `connections:write`, Developer session only. Only the
+        fields present in the body are changed. There is no field you can
+        clear by omission. Disabling (`enabled: false`) is not a separate
+        action — set it here like any other field; a disabled connection is
+        immediately unavailable to the agent regardless of the deployment
+        flag. `media.alias_id` and `media.server_ref` are fixed at creation
+        and are not accepted here.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/MediaConnectionUpdate" }
+      responses:
+        "200":
+          description: The updated media connection
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/MediaConnection" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+        default: { $ref: "#/components/responses/Error" }
+    delete:
+      operationId: deleteMediaConnection
+      tags: [Media connections]
+      summary: Delete a media connection
+      description: |
+        Required scope: `connections:write`, Developer session only. Deleting
+        an already-deleted (or never-existing) connection is also a `204` —
+        delete is idempotent, the same as `/v1/connections/{connection_id}`.
+        Conversations that referenced it keep their history.
+      responses:
+        "204":
+          description: Deleted, or already absent.
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
         default: { $ref: "#/components/responses/Error" }
 
   # --------------------------------------------------------------------------
@@ -1660,6 +1815,61 @@ components:
         checked_at: { type: string, format: date-time }
         latency_ms: { type: [integer, "null"] }
         detail: { type: [string, "null"] }
+
+    MediaConnectionRef:
+      type: object
+      description: |
+        Where this connection's documents live. `alias_id` (this system's key
+        into syslab-server's tenant_alias table) is intentionally not here —
+        it never leaves the server. `library_ref` is a Developer-typed,
+        opaque note: informational only, not read by routing, auth or the
+        prompt, and not sent to syslab-server.
+      required: [library_ref, server_ref]
+      properties:
+        library_ref: { type: [string, "null"], maxLength: 200 }
+        server_ref: { type: string, examples: ["default"] }
+
+    MediaConnection:
+      type: object
+      required: [id, object, kind, name, enabled, status, created_at, updated_at, media]
+      properties:
+        id: { type: string, examples: ["conn_01J8Z9K2"] }
+        object: { type: string, const: connection }
+        kind: { type: string, const: media }
+        name: { type: string, examples: ["Contracts"] }
+        description: { type: [string, "null"] }
+        enabled: { type: boolean }
+        status: { $ref: "#/components/schemas/ConnectionStatus" }
+        status_checked_at: { type: [string, "null"], format: date-time }
+        status_detail: { type: [string, "null"] }
+        media: { $ref: "#/components/schemas/MediaConnectionRef" }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+
+    MediaConnectionCreate:
+      type: object
+      required: [name]
+      properties:
+        name: { type: string, minLength: 1, maxLength: 120 }
+        description: { type: string, maxLength: 2000 }
+        library_ref:
+          type: string
+          maxLength: 200
+          description: "Loose safety charset: letters, digits, spaces, and . _ - : /."
+        server_ref:
+          type: string
+          default: default
+          description: "Must be one of this deployment's known references."
+        enabled: { type: boolean, default: true }
+
+    MediaConnectionUpdate:
+      type: object
+      description: Every field is optional. Omitted fields are left unchanged.
+      properties:
+        name: { type: string, minLength: 1, maxLength: 120 }
+        description: { type: string, maxLength: 2000 }
+        library_ref: { type: string, maxLength: 200 }
+        enabled: { type: boolean }
 
     DatabaseSchema:
       type: object

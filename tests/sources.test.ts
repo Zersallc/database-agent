@@ -449,7 +449,17 @@ describe("tripwire", () => {
     // the deployment switch and the per-library switch that `resolveSources`
     // applies; the phase that needs another caller adds its file here, in the
     // same commit, so the decision is visible in review.
-    const allowed = new Set(["lib/services/connections.ts", "lib/services/sources.ts"]);
+    //
+    // A4's management route is the first: it lists every media connection for
+    // a Developer to administer (including disabled ones, and regardless of
+    // MEDIA_CONNECTIONS_ENABLED) — a different question from "what may this
+    // run use", so bypassing resolveSources's filtering here is deliberate,
+    // not a hole.
+    const allowed = new Set([
+      "lib/services/connections.ts",
+      "lib/services/sources.ts",
+      "app/api/v1/companies/[company_id]/media-connections/route.ts",
+    ]);
     const callers: string[] = [];
     for (const dir of ["lib", "app", "components", "hooks"]) {
       for (const entry of readdirSync(path.join(ROOT, dir), { recursive: true }) as string[]) {
