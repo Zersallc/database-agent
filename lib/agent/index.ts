@@ -560,7 +560,7 @@ const GENERATE_ESG_REPORT_TOOL: ToolDefinition = {
         type: "string",
         description: "Exact hospital group name, matching Hospitals.\"Hospital Group\". Omit if using hospital_name.",
       },
-      year: { type: "integer", description: "Calendar year, e.g. 2026." },
+      year: { type: "integer", description: "Four-digit calendar year the question asks about." },
       month: { type: "integer", description: "Calendar month, 1-12. Omit for a full calendar year." },
     },
     required: ["year"],
