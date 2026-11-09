@@ -183,7 +183,7 @@ export async function runCase(kase: EvalCase, client: ModelClient, options: RunO
     responseDetail: kase.responseDetail ?? "balanced",
     connections,
     client: wrapped,
-    reportGenerator: null,
+    reportGenerator: kase.reportGenerator ?? null,
     libraries,
     now: kase.now,
   })) {

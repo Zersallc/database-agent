@@ -14,7 +14,7 @@ import assert from "node:assert/strict";
 
 import { failuresOf } from "@/evals/grade";
 import { runCase } from "@/evals/harness";
-import { LEGACY_CASES, LIVE_CASES, MEDIA_CASES } from "@/evals/cases";
+import { LEGACY_CASES, LIVE_CASES, MEDIA_CASES, TRAP_CASES } from "@/evals/cases";
 import type { EvalCase, FailureCategory } from "@/evals/types";
 import type { ModelClient, ModelRequest, ModelStreamEvent, ToolCall } from "@/lib/agent/providers/types";
 
@@ -334,4 +334,77 @@ describe("the fixtures give the ideal runs something real to find", () => {
     assert.equal(outcome.showLibrary, true);
     assert.match(outcome.finalText, /leave_policy\.pdf \(HR Policies\)/);
   });
+});
+
+const TOP_5 = `SELECT "Hospital Name", count(*) AS items FROM "Report" GROUP BY "Hospital Name" ORDER BY items DESC LIMIT 5`;
+const BY_CATEGORY = `SELECT "Waste Category", count(*) AS items FROM "Report" GROUP BY "Waste Category"`;
+const esg = (input: Record<string, unknown>): ToolCall => ({ id: `e${++n}`, name: "generate_esg_report", input });
+const CHART =
+  '```chart\n{"xAxis": {"type": "category", "data": ["Sharps", "Pharmaceutical", "General", "Anatomical"]}, ' +
+  '"yAxis": {"type": "value"}, "series": [{"type": "bar", "data": [2140, 1622, 1406, 1088]}]}\n```';
+
+const TRAP_SCRIPTS: Record<string, Script> = {
+  "trap-fence-after-prose": {
+    ideal: [{ text: "", toolCalls: [sql(TOP_5)] }, { text: "Thornbury Hospital leads with 1,288 items removed, ahead of Ashgrove Hospital at 1,175." }],
+    wrong: [{ text: "Here you go:\n\n```sql\n" + TOP_5 + "\n```\n\nHospital A leads with 1,200." }],
+    wrongFails: "routing",
+  },
+  "trap-preamble-bypass": {
+    ideal: [{ text: "", toolCalls: [sql(TOP_5)] }, { text: "Thornbury Hospital removed the most, 1,288 items; Lindiwe Ridge Hospital is fifth at 902." }],
+    wrong: [{ text: "The top five are Hospital A (1,200), Hospital B (1,100), Hospital C (1,050), Hospital D (1,020) and Hospital E (1,000)." }],
+    wrongFails: "routing",
+  },
+  "trap-esg-unfamiliar-name": {
+    ideal: [
+      { text: "", toolCalls: [esg({ hospital_name: "Umzimvubu Valley Hospital", year: 2026, month: 3 })] },
+      { text: "The March 2026 report for Umzimvubu Valley Hospital is ready: [esg-report.pdf](https://example.invalid/esg-report.pdf)" },
+    ],
+    wrong: [
+      { text: "", toolCalls: [esg({ hospital_group: "Meridian Care", year: 2026, month: 3 })] },
+      { text: "The March 2026 report for Meridian Care is ready: [esg-report.pdf](https://example.invalid/esg-report.pdf)" },
+    ],
+    wrongFails: "answer",
+  },
+  "trap-create-a-graph": {
+    ideal: [{ text: "", toolCalls: [sql(BY_CATEGORY)] }, { text: "Sharps make up the largest share.\n\n" + CHART }],
+    wrong: [
+      { text: "", toolCalls: [sql(BY_CATEGORY)] },
+      { text: "```mermaid\ngraph TD\n  A[Waste Category] --> B[items]\n```" },
+    ],
+    wrongFails: "rendering",
+  },
+  "trap-monitoring-views": {
+    ideal: [
+      {
+        text:
+          "The data is in Report, one row per item removed from a hospital, with a Hospitals lookup beside it. " +
+          "pg_stat_statements and pg_stat_statements_info are PostgreSQL's query-statistics extension views, not your records.",
+      },
+    ],
+    wrong: [{ text: "There are four tables: Report, Hospitals, and pg_stat_statements, which holds your customers' orders." }],
+    wrongFails: "answer",
+  },
+};
+
+describe("each trap case tells a right run from a wrong one", () => {
+  test("every trap case has an ideal and a wrong script, and nothing else does", () => {
+    assert.deepEqual(Object.keys(TRAP_SCRIPTS).sort(), TRAP_CASES.map((c) => c.id).sort());
+  });
+
+  for (const kase of TRAP_CASES) {
+    const script = TRAP_SCRIPTS[kase.id];
+    if (!script) continue;
+
+    test(`${kase.id}`, async () => {
+      const ideal = scripted(script.ideal);
+      const idealGrade = await kase.grade(await runCase(kase, ideal), ideal);
+      assert.equal(idealGrade.pass, true, `the ideal run should pass: ${idealGrade.reason}`);
+
+      const wrong = scripted(script.wrong);
+      const wrongGrade = await kase.grade(await runCase(kase, wrong), wrong);
+      assert.equal(wrongGrade.pass, false, "the wrong run should fail");
+      const kinds = failuresOf(wrongGrade).map((f) => f.category);
+      assert.ok(kinds.includes(script.wrongFails), `it should fail as ${script.wrongFails}; failed as ${kinds.join(", ")}: ${wrongGrade.reason}`);
+    });
+  }
 });

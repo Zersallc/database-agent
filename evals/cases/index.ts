@@ -19,6 +19,7 @@ import { mediaEfficiencyCases } from "./media-efficiency.eval";
 import { mediaVagueCases } from "./media-vague.eval";
 import { mediaLiveCases } from "./media-live.eval";
 import { mediaKnownAnswerCases } from "./media-known-answer.eval";
+import { TRAP_CASES } from "./traps.eval";
 import type { EvalCase } from "../types";
 
 /**
@@ -69,5 +70,8 @@ export const LIVE_CASES: EvalCase[] = mediaLiveCases;
  */
 export const KNOWN_ANSWER_CASES: EvalCase[] = mediaKnownAnswerCases;
 
-/** Everything that runs without a syslab-server. What `npm run eval` runs. */
-export const ALL_CASES: EvalCase[] = [...LEGACY_CASES, ...MEDIA_CASES];
+/** The five production traps of 9-10 September, on an invented hospital database. */
+export { TRAP_CASES };
+
+/** Everything that runs without a syslab-server. */
+export const ALL_CASES: EvalCase[] = [...LEGACY_CASES, ...MEDIA_CASES, ...TRAP_CASES];

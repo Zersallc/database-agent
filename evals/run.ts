@@ -4,7 +4,8 @@
  * case rather than a pass/fail verdict for the whole run.
  *
  * `--suite=<list>`  which cases: `legacy` (the original eleven), `media` (the
- *                   media-connection families), `live` (against a real
+ *                   media-connection families), `traps` (the five production
+ *                   traps of 9-10 September), `live` (against a real
  *                   syslab-server; needs RETRIEVAL_* in the environment).
  *                   Comma separated. Default `legacy,media`.
  * `--case=<id>`     only cases whose id contains this substring (comma-separated)
@@ -41,7 +42,7 @@ import { stores } from "@/lib/providers";
 import type { MediaConnectionDoc } from "@/lib/services/connections";
 import { resolveSources } from "@/lib/services/sources";
 
-import { ALL_CASES, KNOWN_ANSWER_CASES, LEGACY_CASES, LIVE_CASES, MEDIA_CASES } from "./cases/index";
+import { ALL_CASES, KNOWN_ANSWER_CASES, LEGACY_CASES, LIVE_CASES, MEDIA_CASES, TRAP_CASES } from "./cases/index";
 import { buildRealClient, cleanupOrThrow, runCaseRepeated, type RunOptions } from "./harness";
 import { CONTRACTS } from "./media-fixtures";
 import { copyMeter, diffMeter, emptyMeter, meteredClient, pacedClient, type Meter } from "./meter";
@@ -184,15 +185,16 @@ async function main() {
   }
   const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 
-  const unknown = suites.filter((s) => !["legacy", "media", "live"].includes(s));
+  const unknown = suites.filter((s) => !["legacy", "media", "traps", "live"].includes(s));
   if (unknown.length > 0) {
-    console.error(`Unknown suite(s): ${unknown.join(", ")}. Known: legacy, media, live.`);
+    console.error(`Unknown suite(s): ${unknown.join(", ")}. Known: legacy, media, traps, live.`);
     process.exit(1);
   }
 
   let selected: EvalCase[] = [
     ...(suites.includes("legacy") ? LEGACY_CASES : []),
     ...(suites.includes("media") ? MEDIA_CASES : []),
+    ...(suites.includes("traps") ? TRAP_CASES : []),
   ];
   if (suites.includes("live")) {
     // The known-answer cases need the same three RETRIEVAL_* settings as

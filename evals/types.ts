@@ -8,7 +8,7 @@
  */
 
 import type { QueryResult, SchemaTable } from "@/lib/connectors";
-import type { AgentEvent } from "@/lib/agent";
+import type { AgentEvent, ReportGenerator } from "@/lib/agent";
 import type { ResponseDetail } from "@/lib/agent/prompt";
 import type { ModelClient, ModelRequest } from "@/lib/agent/providers/types";
 
@@ -246,6 +246,8 @@ export type EvalCase = {
    * graded for not retrying a query that never failed.
    */
   reset?: () => void;
+  /** Offers `generate_esg_report`, backed by this stand-in. Absent means the tool is not offered. */
+  reportGenerator?: ReportGenerator;
   responseDetail?: ResponseDetail;
   /**
    * `client` is the same real client the case ran against — passed through so
