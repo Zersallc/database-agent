@@ -75,9 +75,11 @@ const CELL_CHARS_IN_CONTEXT = Number(process.env.AGENT_CELL_CHARS ?? 400);
 /**
  * Sampling, per thinking mode.
  *
- * Qwen3's published recommendations, and they differ by mode for a reason: the
- * same values that keep a non-thinking answer tight send a thinking one into
- * repetition loops. Sending nothing — which is what this did before — is not
+ * Gemma 4's published recommendation, the same in both modes, which is what
+ * syslab-default serves since 9 November 2026 and what syslab-server's Step 12
+ * trial measured it at. Until then these were Qwen3's per-mode values (0.6/0.95
+ * thinking, 0.7/0.8 not); set AGENT_TEMPERATURE / AGENT_TOP_P to go back to them
+ * for a Qwen model. Sending nothing — which is what this did before that — is not
  * the neutral option it looks like. It leaves the variance to whatever
  * `generation_config.json` the server loaded, so two deployments of the same
  * model answer differently and neither is a choice anyone here made.
@@ -86,8 +88,8 @@ const CELL_CHARS_IN_CONTEXT = Number(process.env.AGENT_CELL_CHARS ?? 400);
  * all, for a provider that rejects a custom value rather than honoring it.
  */
 const SAMPLING = {
-  thinking: { temperature: 0.6, topP: 0.95 },
-  nonThinking: { temperature: 0.7, topP: 0.8 },
+  thinking: { temperature: 1.0, topP: 0.95 },
+  nonThinking: { temperature: 1.0, topP: 0.95 },
 } as const;
 
 /** An env override, `null` for "send nothing", or `undefined` to use the mode default. */

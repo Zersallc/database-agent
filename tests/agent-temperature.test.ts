@@ -6,9 +6,9 @@
  * server happened to load, so the same question answered twice diverged further
  * than a reasoning pass explains and nothing in this repo had a say in it.
  *
- * The values are Qwen3's own published recommendations, and they differ by mode
- * on purpose: what keeps a non-thinking answer tight sends a thinking one into
- * repetition.
+ * The values are Gemma 4's published recommendation (syslab-default since
+ * 9 November 2026), the same in both modes. They were Qwen3's per-mode values
+ * before, and the per-mode shape is kept so a model that needs two can have them.
  */
 
 import { test, describe, afterEach } from "node:test";
@@ -85,16 +85,16 @@ afterEach(() => {
 });
 
 describe("sampling per thinking mode", () => {
-  test("thinking on asks for Qwen3's thinking values", async () => {
+  test("thinking on asks for Gemma 4's values", async () => {
     const request = await requestFor(true);
-    assert.equal(request.temperature, 0.6);
+    assert.equal(request.temperature, 1.0);
     assert.equal(request.topP, 0.95);
   });
 
-  test("thinking off asks for its non-thinking values", async () => {
+  test("thinking off asks for the same values", async () => {
     const request = await requestFor(false);
-    assert.equal(request.temperature, 0.7);
-    assert.equal(request.topP, 0.8);
+    assert.equal(request.temperature, 1.0);
+    assert.equal(request.topP, 0.95);
   });
 
   test("something is always asked for — never left to the server's own default", async () => {
@@ -124,16 +124,16 @@ describe("the environment override", () => {
     process.env.AGENT_TEMPERATURE = "default";
     const request = await requestFor(false);
     assert.equal(request.temperature, null);
-    assert.equal(request.topP, 0.8, "the other field is unaffected");
+    assert.equal(request.topP, 0.95, "the other field is unaffected");
   });
 
   test("nonsense falls back to the mode default rather than sending NaN", async () => {
     process.env.AGENT_TEMPERATURE = "warm";
-    assert.equal((await requestFor(false)).temperature, 0.7);
+    assert.equal((await requestFor(false)).temperature, 1.0);
   });
 
   test("an empty variable is the same as an unset one", async () => {
     process.env.AGENT_TEMPERATURE = "";
-    assert.equal((await requestFor(false)).temperature, 0.7);
+    assert.equal((await requestFor(false)).temperature, 1.0);
   });
 });
