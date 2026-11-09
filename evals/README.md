@@ -16,6 +16,7 @@ npm run eval -- --suite=legacy --repeat=10     # only the original eleven
 npm run eval -- --suite=media --repeat=10      # the media-connection families
 npm run eval -- --suite=live --repeat=10       # against a real syslab-server (needs RETRIEVAL_*)
 npm run eval -- --suite=traps --repeat=10      # the five production traps (cases/traps.eval.ts)
+npm run eval -- --suite=sql --repeat=5         # SQL graded by its result (needs EVAL_COMPANY_DSN; evals/sql/)
 npm run eval -- --suite=legacy --with-library  # the original cases with a document library attached
 npm run eval -- --case=naming --max-rpm=30
 npm run eval -- --repeat=10 --out=evals/results/baseline.json --label="what this run is"

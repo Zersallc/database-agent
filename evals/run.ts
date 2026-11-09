@@ -5,7 +5,8 @@
  *
  * `--suite=<list>`  which cases: `legacy` (the original eleven), `media` (the
  *                   media-connection families), `traps` (the five production
- *                   traps of 9-10 September), `live` (against a real
+ *                   traps of 9-10 September), `sql` (graded by result against
+ *                   eval_company; needs EVAL_COMPANY_DSN), `live` (against a real
  *                   syslab-server; needs RETRIEVAL_* in the environment).
  *                   Comma separated. Default `legacy,media`.
  * `--case=<id>`     only cases whose id contains this substring (comma-separated)
@@ -43,6 +44,7 @@ import type { MediaConnectionDoc } from "@/lib/services/connections";
 import { resolveSources } from "@/lib/services/sources";
 
 import { ALL_CASES, KNOWN_ANSWER_CASES, LEGACY_CASES, LIVE_CASES, MEDIA_CASES, TRAP_CASES } from "./cases/index";
+import { buildSqlCases } from "./cases/sql-known-answer.eval";
 import { buildRealClient, cleanupOrThrow, runCaseRepeated, type RunOptions } from "./harness";
 import { CONTRACTS } from "./media-fixtures";
 import { copyMeter, diffMeter, emptyMeter, meteredClient, pacedClient, type Meter } from "./meter";
@@ -185,9 +187,9 @@ async function main() {
   }
   const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 
-  const unknown = suites.filter((s) => !["legacy", "media", "traps", "live"].includes(s));
+  const unknown = suites.filter((s) => !["legacy", "media", "traps", "sql", "live"].includes(s));
   if (unknown.length > 0) {
-    console.error(`Unknown suite(s): ${unknown.join(", ")}. Known: legacy, media, traps, live.`);
+    console.error(`Unknown suite(s): ${unknown.join(", ")}. Known: legacy, media, traps, sql, live.`);
     process.exit(1);
   }
 
@@ -196,6 +198,14 @@ async function main() {
     ...(suites.includes("media") ? MEDIA_CASES : []),
     ...(suites.includes("traps") ? TRAP_CASES : []),
   ];
+  if (suites.includes("sql")) {
+    const dsn = process.env.EVAL_COMPANY_DSN;
+    if (!dsn) {
+      console.error("--suite=sql needs EVAL_COMPANY_DSN, a read-only login to the eval_company database (evals/sql/eval_company.sql).");
+      process.exit(1);
+    }
+    selected.push(...(await buildSqlCases(dsn)));
+  }
   if (suites.includes("live")) {
     // The known-answer cases need the same three RETRIEVAL_* settings as
     // LIVE_CASES and run under the same --suite=live flag rather than a new
