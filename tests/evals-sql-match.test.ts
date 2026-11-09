@@ -6,7 +6,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 
-import { resultsMatch } from "@/evals/sql-match";
+import { resultsMatch, scalarStated } from "@/evals/sql-match";
 import { SQL_QUESTIONS } from "@/evals/cases/sql-known-answer.eval";
 import type { QueryResult } from "@/lib/connectors";
 
@@ -76,4 +76,14 @@ test("every SQL question has a unique id and a reference, and only the unanswera
     assert.ok(q.reference.trim().length > 0, q.id);
     if (!q.unanswerable) assert.match(q.reference, /\bFROM\b/i, q.id);
   }
+});
+
+test("a one-number question: a wider result holding the number counts only when the reply states it", () => {
+  const ref = result(["count"], [["53"]]);
+  const byStatus = result(["status", "n"], [["cancelled", 53], ["delivered", 1153], ["pending", 34]]);
+  assert.ok(scalarStated(ref, byStatus, "53 orders were cancelled, out of 1,240."));
+  assert.equal(scalarStated(ref, byStatus, "About 4% of orders were cancelled."), false);
+  assert.equal(scalarStated(ref, result(["n"], [[52]]), "53 orders were cancelled."), false);
+  assert.equal(scalarStated(result(["a", "b"], [["1", "2"]]), byStatus, "53"), false);
+  assert.ok(scalarStated(result(["sum"], [["295663.05"]]), result(["total"], [["295663.05"]]), "Delivered orders came to 295,663.05."));
 });

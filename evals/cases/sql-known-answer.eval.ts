@@ -16,7 +16,7 @@
 import { PostgresConnector } from "@/lib/connectors/postgres";
 import type { QueryResult } from "@/lib/connectors";
 import { allOf, answerNeverMatches } from "../grade";
-import { resultsMatch } from "../sql-match";
+import { resultsMatch, scalarStated } from "../sql-match";
 import type { EvalCase, EvalConnection, GradeResult } from "../types";
 
 export type SqlQuestion = {
@@ -206,7 +206,8 @@ export async function buildSqlCases(dsn: string): Promise<EvalCase[]> {
       if (q.unanswerable) {
         return allOf(
           {
-            pass: /no (?:rating|column|field|data|record)|not (?:available|recorded|stored|tracked|captured)|(?:doesn't|does not|don't|do not) (?:have|contain|track|record|store|include)|isn't (?:recorded|stored|tracked)/i.test(outcome.finalText),
+            // "no delivery rating", "don't have that data", "isn't tracked here" all say it.
+            pass: /\bno (?:[\w-]+ )?(?:ratings?|column|field|data|record)|not (?:available|recorded|stored|tracked|captured)|(?:doesn't|does not|don't|do not) (?:have|contain|track|record|store|include)|(?:isn't|is not) (?:recorded|stored|tracked)/i.test(outcome.finalText),
             reason: "says the database holds no ratings",
             category: "answer",
           },
@@ -222,9 +223,12 @@ export async function buildSqlCases(dsn: string): Promise<EvalCase[]> {
           : resultsMatch(reference, result, Boolean(q.ordered))
       );
       const hit = tries.findIndex((t) => t.pass);
+      const scalar = hit < 0 ? ran.findIndex((result) => scalarStated(reference, result, outcome.finalText)) : -1;
       const graded: GradeResult =
         hit >= 0
           ? { pass: true, reason: `query ${hit + 1} of ${ran.length} matches the reference` }
+          : scalar >= 0
+          ? { pass: true, reason: `query ${scalar + 1} of ${ran.length} holds the answer and the reply states it` }
           : { pass: false, reason: `no query matched: ${tries.map((t) => t.reason).join("; ")}`, category: "answer" };
       return graded;
     },

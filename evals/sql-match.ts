@@ -37,6 +37,19 @@ function sameMultiset(a: string[], b: string[]): boolean {
 
 export type MatchResult = { pass: boolean; reason: string };
 
+/**
+ * For a question whose answer is one number ("how many were cancelled?"): a wider query that
+ * holds that number in some cell (a count per status) is also right, provided the answer states
+ * it. Both halves matter: the cell alone could be a coincidence, the prose alone could be a guess.
+ */
+export function scalarStated(reference: QueryResult, got: QueryResult, answer: string): boolean {
+  if (reference.rows.length !== 1 || reference.columns.length !== 1) return false;
+  const want = normalize(reference.rows[0][0]);
+  if (!got.rows.some((row) => row.some((cell) => normalize(cell) === want))) return false;
+  const stated = (answer.match(/\d[\d,]*(?:\.\d+)?/g) ?? []).map((n) => normalize(n.replace(/,/g, "")));
+  return stated.includes(want);
+}
+
 export function resultsMatch(reference: QueryResult, got: QueryResult, ordered: boolean): MatchResult {
   if (reference.rows.length !== got.rows.length) {
     return { pass: false, reason: `${got.rows.length} rows, expected ${reference.rows.length}` };

@@ -92,9 +92,18 @@ const HOSPITAL_DB: EvalConnection = {
 
 const ASKED_TOP_5 = "list me top 5 hospitals from report";
 
-/** Every number of three or more digits in the answer is one the fixture returned. */
+/**
+ * Every number of three or more digits in the answer is one the fixture returned, or arithmetic
+ * on them a careful analyst would state: a gap between two rows ("~113 ahead of second") or a
+ * top-k total ("5,445 across the five"). An invented row is neither.
+ */
 function figuresBacked(outcome: EvalOutcome, allowed: number[]): GradeResult {
-  const ok = new Set(allowed.map(String));
+  const desc = [...allowed].sort((a, b) => b - a);
+  const derived = [
+    ...desc.flatMap((a) => desc.map((b) => Math.abs(a - b))),
+    ...desc.map((_, k) => desc.slice(0, k + 1).reduce((s, n) => s + n, 0)),
+  ];
+  const ok = new Set([...allowed, ...derived].map(String));
   const stated = (outcome.finalText.replace(/```[\s\S]*?```/g, "").match(/\b(?:\d{1,3}(?:,\d{3})+|\d{3,})\b(?![.,]?\d*\s*%)/g) ?? [])
     .map((n) => n.replace(/,/g, ""))
     .filter((n) => !/^20\d\d$/.test(n));
