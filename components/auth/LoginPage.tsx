@@ -1,9 +1,9 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import type { FormEvent } from "react";
-import { useRouter } from "next/navigation";
-import { signIn as nextAuthSignIn } from "next-auth/react";
+import { useRouter, useSearchParams } from "next/navigation";
+import { getProviders, getSession, signIn as nextAuthSignIn } from "next-auth/react";
 import { DatabaseIcon } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
@@ -18,13 +18,69 @@ import { Label } from "@/components/ui/label";
 
 export function LoginPage() {
   const router = useRouter();
+  const searchParams = useSearchParams();
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
 
+  // "Sign in with Sys.Lab": the one login shared by all Sys.Lab products. The
+  // button shows only when the server has it switched on. A link ending in
+  // /login?sso=1 (the Sys.Lab Platform site uses it) goes straight to that
+  // login, so someone already signed in there is not asked again.
+  const [sysLab, setSysLab] = useState(false);
+  const [handingOver, setHandingOver] = useState(false);
+  const [touched, setTouched] = useState(false);
+
+  // What came back in the address after a Sys.Lab sign-in that did not work.
+  const problem = searchParams.get("error");
+  const straightToSysLab = searchParams.get("sso") === "1" && !problem;
+  const returnedError =
+    problem === "NoAccess"
+      ? "Your Sys.Lab login has no Database Agent access yet. Ask your administrator to add you with the same email."
+      : problem
+        ? "Sign-in did not complete. Please try again."
+        : null;
+  const shownError = error ?? (touched ? null : returnedError);
+
+  function signInWithSysLab() {
+    setTouched(true);
+    setHandingOver(true);
+    setError(null);
+    void nextAuthSignIn("cognito", { callbackUrl: "/" });
+  }
+
+  useEffect(() => {
+    let alive = true;
+    void (async () => {
+      try {
+        if (straightToSysLab) {
+          const session = await getSession();
+          if (!alive) return;
+          if (session?.user?.id) {
+            router.replace("/"); // already signed in here: no need to ask the login again
+            return;
+          }
+        }
+        const providers = await getProviders();
+        if (!alive || !providers?.cognito) return;
+        setSysLab(true);
+        if (straightToSysLab) {
+          setHandingOver(true);
+          void nextAuthSignIn("cognito", { callbackUrl: "/" });
+        }
+      } catch {
+        // The page still works with the password form.
+      }
+    })();
+    return () => {
+      alive = false;
+    };
+  }, [straightToSysLab, router]);
+
   async function handleSubmit(e: FormEvent) {
     e.preventDefault();
+    setTouched(true);
     setError(null);
     setLoading(true);
 
@@ -58,13 +114,36 @@ export function LoginPage() {
         <Card>
           <CardHeader>
             <CardTitle>Sign in</CardTitle>
-            <CardDescription>Use your workspace email and password.</CardDescription>
+            <CardDescription>
+              {sysLab
+                ? "Use your Sys.Lab login, or your workspace email and password."
+                : "Use your workspace email and password."}
+            </CardDescription>
           </CardHeader>
           <CardContent>
+            {sysLab && (
+              <div className="mb-4 space-y-4">
+                <Button
+                  type="button"
+                  variant="outline"
+                  className="w-full"
+                  disabled={handingOver || loading}
+                  onClick={signInWithSysLab}
+                >
+                  {handingOver ? "Opening the Sys.Lab login…" : "Sign in with Sys.Lab"}
+                </Button>
+                <div className="flex items-center gap-3 text-xs text-muted-foreground">
+                  <span className="h-px flex-1 bg-border" />
+                  or
+                  <span className="h-px flex-1 bg-border" />
+                </div>
+              </div>
+            )}
+
             <form onSubmit={handleSubmit} className="space-y-3">
-              {error && (
+              {shownError && (
                 <p className="rounded-md bg-destructive/10 px-3 py-2 text-sm text-destructive">
-                  {error}
+                  {shownError}
                 </p>
               )}
 
