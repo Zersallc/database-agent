@@ -3,7 +3,7 @@
 import { useEffect, useState } from "react";
 import type { FormEvent } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
-import { getProviders, getSession, signIn as nextAuthSignIn } from "next-auth/react";
+import { getProviders, signIn as nextAuthSignIn } from "next-auth/react";
 import { DatabaseIcon } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
@@ -55,20 +55,15 @@ export function LoginPage() {
     void (async () => {
       try {
         if (straightToSysLab) {
-          const session = await getSession();
-          if (!alive) return;
-          if (session?.user?.id) {
-            router.replace("/"); // already signed in here: no need to ask the login again
-            return;
-          }
+          // /sso decides on the server (already signed in here, or on to the Sys.Lab
+          // login), so this page's form is never shown to someone arriving from the
+          // Sys.Lab Platform.
+          window.location.replace("/sso");
+          return;
         }
         const providers = await getProviders();
         if (!alive || !providers?.cognito) return;
         setSysLab(true);
-        if (straightToSysLab) {
-          setHandingOver(true);
-          void nextAuthSignIn("cognito", { callbackUrl: "/" });
-        }
       } catch {
         // The page still works with the password form.
       }
@@ -98,6 +93,17 @@ export function LoginPage() {
 
     router.replace("/");
     router.refresh();
+  }
+
+  if (straightToSysLab) {
+    return (
+      <div className="flex min-h-svh flex-col items-center justify-center gap-3 bg-muted/40 px-4">
+        <div className="flex size-11 items-center justify-center rounded-xl bg-primary text-primary-foreground">
+          <DatabaseIcon className="size-5" />
+        </div>
+        <p className="text-sm text-muted-foreground" role="status">Signing you in…</p>
+      </div>
+    );
   }
 
   return (
