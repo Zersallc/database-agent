@@ -406,6 +406,11 @@ describe("sourcesCorrection: what a second attempt is told", () => {
     assert.match(message, /leave the block out/);
   });
 
+  test("an answer that the documents do not cover something is told it still cites what it searched", () => {
+    const message = sourcesCorrection(ledgerWith({ documents: { Contracts: ["contract_03.pdf"] } }), ONE);
+    assert.match(message, /do not cover something relied on the documents you searched: list them/);
+  });
+
   test("with one library the lines carry no library", () => {
     const message = sourcesCorrection(ledgerWith({ documents: { Contracts: ["contract_03.pdf"] } }), ONE);
     assert.match(message, /\ncontract_03\.pdf\n/);

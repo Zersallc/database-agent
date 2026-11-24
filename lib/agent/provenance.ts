@@ -381,6 +381,9 @@ export function sourcesCorrection(ledger: ProvenanceLedger, style: SourceStyle):
     "Your answer drew on documents but did not end with a Sources block. Write the answer again and finish it " +
     'with a Sources block: the line "Sources:" and then one line for each source you relied on, using only ' +
     `these lines, copied exactly:\n\n${lines.join("\n")}\n\n` +
+    // Gemma 4 read an answer of "the documents do not cover this" as relying on
+    // nothing and dropped the block every time (media-insufficient-uncovered-customer).
+    "An answer that the documents do not cover something relied on the documents you searched: list them. " +
     "If your answer relied on none of them, give the same answer and leave the block out."
   );
 }
