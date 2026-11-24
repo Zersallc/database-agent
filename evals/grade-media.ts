@@ -154,16 +154,37 @@ export function truth(outcome: EvalOutcome): Truth[] {
   return found;
 }
 
-const HEADING = /^\s{0,3}(?:#{1,6}\s+)?(?:(\*\*|__)\s*)?sources?\s*:?\s*\1?\s*:?\s*$/i;
+const HEADING = /^\s{0,3}(?:#{1,6}\s+)?(?:(\*\*|__|\*|_)\s*)?sources?\s*:?\s*\1?\s*:?\s*$/i;
 
-/** The lines under the last bare "Sources" heading, up to a blank line, a fence or a heading. Null if there is no such heading. */
+/**
+ * "Sources: a.pdf" or "**Sources:** a.pdf" as the answer's last line: a block of
+ * one, which the application accepts and rebuilds (lib/agent/provenance.ts).
+ * Without this, Gemma 4 runs that delivered a valid block were failed for
+ * having written none (media-multi-leave-policy).
+ */
+const INLINE = [
+  /^\s{0,3}(?:#{1,6}\s+)?sources?\s*:\s+(\S.*)$/i,
+  /^\s{0,3}(?:#{1,6}\s+)?(?:\*\*|__)\s*sources?\s*:?\s*(?:\*\*|__)\s*:?\s+(\S.*)$/i,
+];
+
+/**
+ * The lines under the last bare "Sources" heading, up to a blank line, a fence
+ * or a heading, or the one entry of an inline heading on the last line. Null if
+ * there is neither.
+ */
 export function blockLines(text: string): string[] | null {
   const lines = text.split("\n");
+  let lastContent = lines.length - 1;
+  while (lastContent >= 0 && lines[lastContent].trim() === "") lastContent -= 1;
   let at = -1;
   for (let index = lines.length - 1; index >= 0; index--) {
     if (HEADING.test(lines[index])) {
       at = index;
       break;
+    }
+    if (index === lastContent) {
+      const inline = INLINE.map((pattern) => pattern.exec(lines[index])?.[1]).find(Boolean);
+      if (inline) return [inline];
     }
   }
   if (at === -1) return null;

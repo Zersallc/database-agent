@@ -160,6 +160,12 @@ describe("what the run's own results back", () => {
   test("the block is the lines under the last Sources heading", () => {
     assert.deepEqual(blockLines("Answer.\n\nSources:\na.pdf\nb.pdf\n\nTail."), ["a.pdf", "b.pdf"]);
     assert.equal(blockLines("Answer with no block."), null);
+    // The forms the application accepts too (lib/agent/provenance.ts).
+    assert.deepEqual(blockLines("Answer.\n\nSources: leave_policy.pdf\n"), ["leave_policy.pdf"]);
+    assert.deepEqual(blockLines("Answer.\n\n**Sources:** leave_policy.pdf"), ["leave_policy.pdf"]);
+    assert.deepEqual(blockLines("Answer.\n\n*Sources:*\nleave_policy.pdf"), ["leave_policy.pdf"]);
+    // Inline only counts as the last line: "Sources: x" mid-answer is prose.
+    assert.equal(blockLines("Sources: the HR library.\n\nAnd that is all."), null);
   });
 });
 
