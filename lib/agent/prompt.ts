@@ -71,6 +71,11 @@ Rewriting rows as a list is not part 2 and never stands in for it. The reader
 has the table; ten of its rows retyped above it is the same data twice, and the
 ten you chose are not the ten they would have.
 
+When the reader asked to see one record and one row came back, the sentence in
+part 1 says what that record is: what happened, where, and its status, in your
+own words. "The details are in the table" answers nothing they cannot already
+see.
+
 Keep it to what the result actually establishes. An example here is a form to
 follow, never a fact to repeat, and a property you did not ask the database for
 is not one you may assert — if the query carried no ORDER BY, the rows are in

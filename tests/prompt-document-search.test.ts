@@ -27,12 +27,16 @@ const sha256 = (text: string) => createHash("sha256").update(text).digest("hex")
  * prompt as it stood immediately before document libraries were added. If a
  * later edit to the database-only prompt is intended, update these in the same
  * commit and say why: the eval baseline then no longer describes the prompt.
+ *
+ * Updated 2026-11-24 for the one-row "say what that record is" rule: Gemma 4
+ * answered "All details for observation … are in the table" in 3 of 32
+ * follow-up-row-on-screen runs. Re-baselined with legacy and traps.
  */
 const DATABASE_ONLY_HASHES: Record<string, string> = {
-  "no database attached": "b0d8610904f245747ac4cea396ce05b418a646adb78f7946fcbab053eb6588c5",
-  "one postgres database": "adb737e660f47374b7367ce36efe45d44ffbafdf65b55878861b6502d23f99e1",
-  "two databases and a playbook": "b37cca6fead44fd5adf4d81c780dd5f762c34151dddc7148fcd7a597f03b698a",
-  "the built-in sample dataset": "f552ba9ea9163a4cfafc27a07d5ea153790ef9a72c516b42738302ec5430c068",
+  "no database attached": "7fc5217036c9a0346cfe3c3b558ba9b45bfc27bad318f74b991979991edcd14d",
+  "one postgres database": "9a70c157af2cb83864fd8b40f95d4f4f26c73bd7f3dcdb9b72f38d4f07a71797",
+  "two databases and a playbook": "ed4a4c2b85f5457020e6b67cb691ff9c542824d44077ca618116163c48a88159",
+  "the built-in sample dataset": "81d2e315d7d59be4ba8f53af9a822216fe1387592a0986dff0c7d16868812055",
 };
 
 const CONTRACTS: PromptLibrary = { name: "Contracts", description: "Supplier and customer contracts." };
