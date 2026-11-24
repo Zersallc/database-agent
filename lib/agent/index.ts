@@ -73,6 +73,25 @@ const RESULT_CHARS_IN_CONTEXT = Number(process.env.AGENT_RESULT_CHARS ?? 12000);
 const CELL_CHARS_IN_CONTEXT = Number(process.env.AGENT_CELL_CHARS ?? 400);
 
 /**
+ * From this many queries in one answer on, each result carries a note to stop
+ * and take stock. Gemma 4, asked for a figure the database does not hold, ran
+ * 6-11 queries in a row hunting for it instead of saying so, searching the
+ * documents, or asking (evals/results/v033-gemma-media.json). A real analysis
+ * can need this many, so the note is conditional advice, never a refusal.
+ */
+const QUERY_CHECKPOINT = Number(process.env.AGENT_QUERY_CHECKPOINT ?? 5);
+
+function queryCheckpointNote(queriesRun: number, hasLibraries: boolean): string | null {
+  if (queriesRun < QUERY_CHECKPOINT) return null;
+  return (
+    `This is query ${queriesRun} for this answer. If the results so far have not shown what the ` +
+    `question needs, stop querying: say what you found and what the database does not hold` +
+    (hasLibraries ? `, search the documents if they could hold it,` : "") +
+    ` or ask the reader one short question.`
+  );
+}
+
+/**
  * Sampling, per thinking mode.
  *
  * Gemma 4's published recommendation, the same in both modes, which is what
@@ -630,6 +649,8 @@ export async function* runAgent(input: AgentRunInput): AsyncGenerator<AgentEvent
   // has already been spent. Both are per-run, not per-iteration: a turn that
   // queried and then summarised has done its work and must not be retried.
   let toolCallsMade = 0;
+  /** run_sql calls with a statement, for `queryCheckpointNote`. */
+  let sqlQueriesRun = 0;
   let forcedRetryUsed = false;
   let toolChoice: "auto" | "required" = "auto";
   /**
@@ -1295,6 +1316,8 @@ export async function* runAgent(input: AgentRunInput): AsyncGenerator<AgentEvent
 
         const sql = typeof call.input.sql === "string" ? call.input.sql : "";
         const purpose = typeof call.input.purpose === "string" ? call.input.purpose : "";
+        sqlQueriesRun += 1;
+        const checkpoint = queryCheckpointNote(sqlQueriesRun, libraries.length > 0);
 
         if (!sql.trim()) {
           // A model that called the tool with no statement gets told so rather
@@ -1352,16 +1375,17 @@ export async function* runAgent(input: AgentRunInput): AsyncGenerator<AgentEvent
             role: "tool",
             toolCallId: call.id,
             toolName: call.name,
-            content: JSON.stringify(
-              summarize(
+            content: JSON.stringify({
+              ...summarize(
                 result,
                 sql,
                 target.schema,
                 unvouched,
                 lastQueryOtherDateColumns,
                 lastQueryNoWinner
-              )
-            ),
+              ),
+              ...(checkpoint ? { checkpoint } : {}),
+            }),
             isError: false,
           });
         } catch (error) {
@@ -1374,7 +1398,7 @@ export async function* runAgent(input: AgentRunInput): AsyncGenerator<AgentEvent
             role: "tool",
             toolCallId: call.id,
             toolName: call.name,
-            content: `The query failed: ${detail}`,
+            content: `The query failed: ${detail}${checkpoint ? `\n\n${checkpoint}` : ""}`,
             isError: true,
           });
         }

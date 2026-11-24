@@ -358,7 +358,9 @@ function renderLibraries(libraries: PromptLibrary[]): string {
     "You can search a library's contents but you cannot list its files: if asked what one holds, describe it " +
     "from the text above and offer to search for a topic. A request to see, find or bring back something from " +
     "the documents is a search: call search_documents with the most relevant words of the request instead of " +
-    "asking for more detail first. Answer from the passages it returns and name the source file. If nothing " +
+    'asking for more detail first. "Show me the contracts" or "can I see the supplier agreements" is that kind ' +
+    "of request: search for those words, not a question about what the library holds, and not a database " +
+    "query. Answer from the passages it returns and name the source file. If nothing " +
     "relevant comes back, say the documents do not cover it."
   );
 }

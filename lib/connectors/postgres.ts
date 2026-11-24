@@ -83,7 +83,8 @@ const INTROSPECTION_SQL = `
          c.is_nullable,
          COALESCE(pk.is_primary, false) AS is_primary,
          obj.description AS table_comment,
-         col.description AS column_comment
+         col.description AS column_comment,
+         cls.reltuples AS row_estimate
     FROM information_schema.columns c
     JOIN information_schema.tables t
       ON t.table_schema = c.table_schema AND t.table_name = c.table_name
@@ -97,8 +98,11 @@ const INTROSPECTION_SQL = `
     ) pk ON pk.table_schema = c.table_schema
         AND pk.table_name = c.table_name
         AND pk.column_name = c.column_name
+    LEFT JOIN pg_catalog.pg_namespace ns
+      ON ns.nspname = c.table_schema
     LEFT JOIN pg_catalog.pg_class cls
       ON cls.relname = c.table_name
+     AND cls.relnamespace = ns.oid
     LEFT JOIN pg_catalog.pg_description obj
       ON obj.objoid = cls.oid AND obj.objsubid = 0
     LEFT JOIN pg_catalog.pg_description col
@@ -256,6 +260,16 @@ export function looksLikeIdentifiers(values: string[]): boolean {
   return matches.length * 3 >= values.length;
 }
 
+/**
+ * The planner's row count for a table, or null when it has none to give.
+ * `reltuples` is -1 for a table never analysed (PG 14+) and 0 for a view or,
+ * before PG 14, for an unanalysed table: none of those is a count worth showing.
+ */
+export function rowEstimate(reltuples: unknown): number | null {
+  const value = Number(reltuples);
+  return Number.isFinite(value) && value > 0 ? Math.round(value) : null;
+}
+
 export class PostgresConnector implements DataSourceConnector {
   readonly engine = "postgres" as const;
   private client: any = null;
@@ -323,7 +337,7 @@ export class PostgresConnector implements DataSourceConnector {
           schema: row.table_schema,
           name: row.table_name,
           description: row.table_comment ?? null,
-          row_estimate: null,
+          row_estimate: rowEstimate(row.row_estimate),
           columns: [],
         };
         tables.set(key, table);
