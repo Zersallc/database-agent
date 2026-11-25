@@ -205,6 +205,29 @@ describe("the forced-tool retry", () => {
     assert.equal(client.requests.length, 1, "```sql alone must not force a query");
   });
 
+  test("a query written instead of run, when nobody asked for SQL, is retried", async () => {
+    // Gemma 4, no-invented-attribution: the query in a block, then a name nobody returned.
+    const { events, client } = await run(
+      [{ text: "```sql\nSELECT reported_by FROM observation WHERE observation_id = '6d24bef9';\n```\nIt was reported by Sarah Jenkins." }],
+      "by who?"
+    );
+    assert.equal(client.requests.length, 2);
+    assert.equal(client.requests[1].toolChoice, "required");
+    assert.ok(events.some((e) => e.type === "step" && /retrying/.test(e.step.label)));
+  });
+
+  test("revising a query the last reply drafted is still writing SQL, not answering", async () => {
+    const { client } = await run(
+      [{ text: "```sql\nSELECT 1 WHERE year = 2025;\n```" }],
+      "now add a filter for 2025",
+      [
+        { role: "user", content: "write me that query, do not run it" },
+        { role: "assistant", content: "```sql\nSELECT 1;\n```" },
+      ]
+    );
+    assert.equal(client.requests.length, 1);
+  });
+
   test("a turn that did run a query is not retried", async () => {
     const { client } = await run([
       {

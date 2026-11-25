@@ -403,7 +403,7 @@ function claimsAMostCommonValue(text: string): boolean {
  * instruction. A widened detector bought a false positive worse than the bug.
  * Since the interface now renders the real query from the tool call, an
  * unbacked ```sql``` block is visibly empty rather than silently wrong, so it
- * does not need forcing.
+ * does not need forcing — unless the reader never asked for SQL; see below.
  *
  * A claim of *absence* — "no observations match that" — carries no figure and
  * promises nothing, so it reads exactly like a grounded answer here and this
@@ -417,9 +417,18 @@ function claimsAMostCommonValue(text: string): boolean {
 function unbackedAnswerReason(
   text: string,
   grounded: string[],
-  valueSources: string[]
+  valueSources: string[],
+  sqlWasAskedFor: boolean
 ): string | null {
   if (/```(table|chart)\b/.test(text)) return "The reply presented data that no query produced.";
+  // The exception above, kept narrow: an unrun ```sql block is only legitimate
+  // when the reader asked for SQL. Otherwise it is a query written instead of
+  // run, and Gemma 4 followed it with an invented answer ("It was reported by
+  // Sarah Jenkins") in about 1 of 20 no-invented-attribution runs, unquoted, so
+  // nothing below caught it.
+  if (!sqlWasAskedFor && /```sql\b/i.test(text)) {
+    return "The reply wrote a query instead of running it.";
+  }
   if (statesUngroundedFigure(text, grounded)) {
     return "The reply stated a figure that no query in this conversation produced.";
   }
@@ -431,6 +440,9 @@ function unbackedAnswerReason(
   }
   return null;
 }
+
+/** A question that asks for SQL itself: "write me a query", "what's the SQL for…", "give me a SELECT". */
+const SQL_REQUEST = /\b(?:sql|query|queries|select statement|statement)\b/i;
 
 export type AgentConnection = {
   id: string;
@@ -747,6 +759,14 @@ export async function* runAgent(input: AgentRunInput): AsyncGenerator<AgentEvent
    * rather than invented, and `renderValues` puts plenty of both in front of it.
    */
   const valueSources = [...grounded, system];
+  /**
+   * Whether this turn is about writing SQL rather than answering from it: the
+   * question names SQL or a query, or the last reply was itself a query being
+   * drafted ("now add a filter for 2025"). Only then may a reply carry a
+   * ```sql block that no tool call ran.
+   */
+  const lastReply = [...input.history].reverse().find((message) => message.role === "assistant")?.content ?? "";
+  const sqlWasAskedFor = SQL_REQUEST.test(input.question) || /```sql\b/i.test(lastReply);
   let inputTokens = 0;
   let outputTokens = 0;
 
@@ -863,7 +883,7 @@ export async function* runAgent(input: AgentRunInput): AsyncGenerator<AgentEvent
          */
         const unbacked =
           !forcedRetryUsed && toolCallsMade === 0 && tools.length > 0
-            ? unbackedAnswerReason(answer, grounded, valueSources)
+            ? unbackedAnswerReason(answer, grounded, valueSources, sqlWasAskedFor)
             : null;
 
         if (unbacked) {
