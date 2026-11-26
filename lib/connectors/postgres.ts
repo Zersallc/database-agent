@@ -415,8 +415,10 @@ export class PostgresConnector implements DataSourceConnector {
     try {
       // A server-side timeout, not just a client one: without it a runaway
       // query keeps burning database CPU after we have given up on it.
+      // Session-level, not LOCAL: outside a transaction SET LOCAL is a no-op,
+      // and each query runs on its own short-lived client (withConnector).
       if (options.timeoutMs) {
-        await client.query(`SET LOCAL statement_timeout = ${Math.floor(options.timeoutMs)}`);
+        await client.query(`SET statement_timeout = ${Math.floor(options.timeoutMs)}`);
       }
 
       // Ask for one row past the ceiling so we can say `truncated: true`
