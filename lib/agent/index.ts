@@ -267,6 +267,79 @@ function statesUngroundedFigure(text: string, grounded: string[]): boolean {
   return stated.some((figure) => !available.has(figure));
 }
 
+/** Numbers in text with where they sit, skipping digits glued to letters ("6d24bef9", "v2"). */
+function numbersWithContext(text: string): { value: number; percent: boolean }[] {
+  const out: { value: number; percent: boolean }[] = [];
+  for (const match of text.matchAll(/\d[\d,]*(?:\.\d+)?/g)) {
+    const start = match.index ?? 0;
+    const end = start + match[0].length;
+    if (/[A-Za-z_]/.test(text[start - 1] ?? "") || /[A-Za-z_]/.test(text[end] ?? "")) continue;
+    const value = Number(match[0].replace(/,/g, "").replace(/\.$/, ""));
+    if (Number.isFinite(value)) out.push({ value, percent: /^\s*%/.test(text.slice(end)) });
+  }
+  return out;
+}
+
+/** The forms a reader would write a figure in: as given, to the cent, to one decimal, whole. */
+function figureKeys(value: number): number[] {
+  return [Math.round(value * 100) / 100, Math.round(value * 10) / 10, Math.round(value)];
+}
+
+/** Each column of these rows that holds numbers, as numbers. */
+export function numericColumnsOf(rows: unknown[][]): number[][] {
+  const width = Math.max(0, ...rows.map((row) => row.length));
+  const columns: number[][] = [];
+  for (let index = 0; index < width; index++) {
+    const values = rows
+      .map((row) => row[index])
+      .filter((cell) => typeof cell === "number" || (typeof cell === "string" && /^-?\d+(?:\.\d+)?$/.test(cell.trim())))
+      .map(Number);
+    if (values.length > 0) columns.push(values);
+  }
+  return columns;
+}
+
+/**
+ * The first figure an answer states that nothing this run could have given it,
+ * or null.
+ *
+ * Backed means: in a tool result or the conversation, or arithmetic on one
+ * result column a careful analyst would state — a top-N total, the column total,
+ * its mean, or the gap between two rows. Only figures of 100 or more are
+ * judged, and not percentages, years, or round hundreds ("over 1,000" is an
+ * approximation, not a claim to check digit by digit): a slipped digit in a
+ * total is the failure, and small numbers carry too little to tell it apart
+ * from ordinary counting.
+ */
+export function unbackedFigureAfterQueries(
+  text: string,
+  messages: ModelMessage[],
+  grounded: string[],
+  columns: number[][]
+): number | null {
+  const prose = withoutFencedBlocks(text).replace(/^[ \t]*\d+[.)]\s/gm, " ");
+  const stated = numbersWithContext(prose)
+    .filter(({ value, percent }) => !percent && value >= 100 && value % 100 !== 0)
+    .filter(({ value }) => !(Number.isInteger(value) && value >= 1900 && value <= 2100))
+    .map(({ value }) => value);
+  if (stated.length === 0) return null;
+
+  const allowed = new Set<number>();
+  const allow = (value: number) => figureKeys(value).forEach((key) => allowed.add(key));
+  for (const source of [...grounded, ...messages.map((message) => message.content ?? "")]) {
+    for (const { value } of numbersWithContext(source)) allow(value);
+  }
+  for (const column of columns) {
+    const desc = [...column].sort((a, b) => b - a);
+    let running = 0;
+    for (const value of desc) allow((running += value));
+    allow(running / desc.length);
+    for (const a of desc) for (const b of desc) allow(Math.abs(a - b));
+  }
+
+  return stated.find((value) => !figureKeys(value).some((key) => allowed.has(key))) ?? null;
+}
+
 /**
  * The values this turn put in quotes.
  *
@@ -691,6 +764,9 @@ export async function* runAgent(input: AgentRunInput): AsyncGenerator<AgentEvent
    */
   let lastQueryTypeMismatch: string | null = null;
   let typeMismatchCorrected = false;
+  /** Numeric columns of each result, as the model saw them, for `unbackedFigureAfterQueries`. */
+  const numericColumns: number[][] = [];
+  let figureCorrected = false;
   /**
    * Set when the most recent query found nothing after dating its rows by one
    * of the table's several date columns — see `unqueriedDateColumns`. Empty
@@ -1110,6 +1186,39 @@ export async function* runAgent(input: AgentRunInput): AsyncGenerator<AgentEvent
         }
 
         /**
+         * A figure the answer states after querying that nothing backs: not a
+         * value any tool returned, not in the conversation, and not a sum or a
+         * gap a reader could get from the rows. Gemma 4 adds totals in prose
+         * and slips a digit in about 1 answer in 20 (6,445 for 5,445). Not
+         * forced: the fix may be a SUM query or just dropping the figure.
+         */
+        const unbackedFigure =
+          !figureCorrected && toolCallsMade > 0
+            ? unbackedFigureAfterQueries(answer, messages, grounded, numericColumns)
+            : null;
+        if (unbackedFigure) {
+          figureCorrected = true;
+          const shown = unbackedFigure.toLocaleString("en-US");
+          yield emit({
+            label: "Stated a figure no result backs — retrying",
+            status: "done",
+            detail: `${shown} is not in any result, and not a sum or difference of the rows.`,
+            query_id: null,
+          });
+          messages.push({
+            role: "user",
+            content:
+              `Your answer states ${shown}, which is not in any query result and is not a sum or difference of ` +
+              `the rows. If it is a total, get it from a query (SUM, or COUNT(*) OVER ()) instead of adding it up ` +
+              `yourself; otherwise leave it out. Then answer again.`,
+          });
+          answer = "";
+          reasoning = "";
+          yield { type: "reset" };
+          continue;
+        }
+
+        /**
          * Sources. Only in a workspace that has libraries: without them the
          * model was never asked for a block, and what it writes is left alone.
          *
@@ -1385,6 +1494,7 @@ export async function* runAgent(input: AgentRunInput): AsyncGenerator<AgentEvent
           lastQueryNoWinner = ranking ? noWinnerNote(ranking) : null;
           lastQueryNothingRepeats = ranking?.nothingRepeats ?? false;
           for (const value of vouchedFrom(result.rows)) vouched.add(value);
+          numericColumns.push(...numericColumnsOf(result.rows.slice(0, ROWS_IN_CONTEXT)));
           yield emit({
             label: purpose || "Ran query",
             status: "done",
