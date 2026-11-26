@@ -216,6 +216,36 @@ describe("the forced-tool retry", () => {
     assert.ok(events.some((e) => e.type === "step" && /retrying/.test(e.step.label)));
   });
 
+  test("a 'who' answered with a name nobody returned, unquoted and with no query, is retried", async () => {
+    // Gemma 4, no-invented-attribution: no block, no quotes, no query.
+    const { client } = await run([{ text: "It was reported by Sarah Jenkins." }], "by who?");
+    assert.equal(client.requests.length, 2);
+    assert.equal(client.requests[1].toolChoice, "required");
+  });
+
+  test("an initial and a surname is a name too", async () => {
+    const { client } = await run([{ text: "J. Smith raised it." }], "who raised it?");
+    assert.equal(client.requests.length, 2);
+  });
+
+  test("a name the conversation already established is not chased", async () => {
+    const { client } = await run([{ text: "That was Layla Al-Hinai, as above." }], "who was it again?", [
+      { role: "user", content: "who reported it?" },
+      { role: "assistant", content: "It was reported by Layla Al-Hinai." },
+    ]);
+    assert.equal(client.requests.length, 1);
+  });
+
+  test("a question about the assistant itself is small talk, not a record", async () => {
+    const { client } = await run([{ text: "I'm the Database Agent for this workspace." }], "who are you?");
+    assert.equal(client.requests.length, 1);
+  });
+
+  test("outside a 'who' question two capitalised words are left alone", async () => {
+    const { client } = await run([{ text: "Hello! Ask me about Thornbury Hospital or anything else." }], "hi");
+    assert.equal(client.requests.length, 1);
+  });
+
   test("revising a query the last reply drafted is still writing SQL, not answering", async () => {
     const { client } = await run(
       [{ text: "```sql\nSELECT 1 WHERE year = 2025;\n```" }],

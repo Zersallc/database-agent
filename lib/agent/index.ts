@@ -381,6 +381,35 @@ function quotedValuesIn(text: string): string[] {
  * schema's `Health or Hygiene or Ergonomic Hazards`, because the model is
  * naming something real in shorter words. The reverse never vouches.
  */
+/** A question about a person: "who reported it", "by who?", "whose", "by whom". */
+const ASKS_WHO = /\bwho(?:m|se)?\b/i;
+/** "Who are you?", "who made you?" are about the assistant, not a record. */
+const ASKS_ABOUT_YOU = /\bwho\s+(?:are|r)\s+(?:you|u)\b|\bwho\s+(?:made|built|created|trained|designed)\s+(?:you|u|this)\b/i;
+
+/** Capitalised words that start sentences or name time, never a person. */
+const NOT_A_NAME =
+  /^(?:The|This|That|These|Those|It|Its|He|She|They|There|Here|I|We|You|A|An|In|On|At|By|For|From|No|Yes|Sources?|January|February|March|April|May|June|July|August|September|October|November|December|Monday|Tuesday|Wednesday|Thursday|Friday|Saturday|Sunday)$/;
+
+/** One word of a name: "Sarah", "Al-Hinai", "O'Neil", or an initial, "J.". */
+const NAME_WORD = String.raw`(?:[A-Z]\.|[A-Z][a-z]+(?:[-'’][A-Z]?[a-z]+)*)`;
+const NAME = new RegExp(String.raw`\b${NAME_WORD}(?:\s+${NAME_WORD}){1,2}(?![\w-])`, "g");
+
+/**
+ * A personal name, two or three capitalised words, that appears nowhere this
+ * turn could have read one. Only asked on "who" questions, where a name is the
+ * claim; elsewhere two capitalised words are as likely a place or a hospital.
+ */
+export function ungroundedNameIn(text: string, sources: string[]): string | null {
+  const haystack = sources.map((source) => source.toLowerCase());
+  for (const match of withoutFencedBlocks(text).matchAll(NAME)) {
+    const words = match[0].split(/\s+/);
+    if (words.some((word) => NOT_A_NAME.test(word))) continue;
+    const probe = match[0].toLowerCase();
+    if (!haystack.some((source) => source.includes(probe))) return match[0];
+  }
+  return null;
+}
+
 function quotesUngroundedValue(text: string, sources: string[]): boolean {
   const quoted = quotedValuesIn(text);
   if (quoted.length === 0) return false;
@@ -507,6 +536,13 @@ function unbackedAnswerReason(
   }
   if (quotesUngroundedValue(text, valueSources)) {
     return "The reply quoted a value that no query in this conversation returned.";
+  }
+  // grounded[0] is the question. A "who" asked and a name answered, with no
+  // query and no quotes: "It was reported by Sarah Jenkins" (Gemma 4, about 1
+  // in 20 no-invented-attribution runs), which nothing above could see.
+  const question = grounded[0] ?? "";
+  if (ASKS_WHO.test(question) && !ASKS_ABOUT_YOU.test(question) && ungroundedNameIn(text, valueSources)) {
+    return "The reply named someone that no query in this conversation returned.";
   }
   if (promisesAnActionItDidNotTake(text)) {
     return "The reply said it would run a query and then did not.";
